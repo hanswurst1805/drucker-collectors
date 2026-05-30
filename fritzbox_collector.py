@@ -246,11 +246,16 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
     if not push_neighbors or not neighbors:
         return
 
-    # Nur Hosts mit IP oder MAC pushen
+    # Nur Hosts mit IP UND (Hostname oder MAC) pushen
     neighbor_devices = []
     for n in neighbors:
+        # Mindestens IP oder MAC muss vorhanden sein
         if not n.get("ip") and not n.get("mac"):
             continue
+        # Geräte ohne IP überspringen (inaktiv, nur im ARP-Cache)
+        if not n.get("ip"):
+            continue
+        # Fritz!Box selbst überspringen
         if n.get("ip") == config["host"]:
             continue
 
