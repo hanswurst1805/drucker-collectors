@@ -209,6 +209,26 @@ def collect_packages(q) -> list[dict]:
                 "pkg_type": "application",
                 "source": "windows-programs",
             })
+    elif platform.system() == "Darwin":
+        # macOS: Homebrew
+        brew = q("SELECT name, version FROM homebrew_packages WHERE name != ''")
+        for r in brew:
+            packages.append({
+                "pkg_name": r.get("name", ""),
+                "pkg_version": r.get("version", "unknown"),
+                "pkg_type": "library",
+                "source": "homebrew",
+            })
+        # macOS: .app-Anwendungen aus /Applications
+        apps = q("SELECT name, bundle_short_version FROM apps WHERE bundle_short_version != '' LIMIT 200")
+        for r in apps:
+            name = r.get("name", "").replace(".app", "")
+            packages.append({
+                "pkg_name": name,
+                "pkg_version": r.get("bundle_short_version", "unknown"),
+                "pkg_type": "application",
+                "source": "macos-apps",
+            })
     else:
         # Linux: DEB oder RPM
         deb = q("SELECT name, version, source FROM deb_packages WHERE name != '' LIMIT 2000")
@@ -347,6 +367,8 @@ def main():
     if platform.system() == "Linux":
         asset_type = "server"
     elif platform.system() == "Windows":
+        asset_type = "client"
+    elif platform.system() == "Darwin":
         asset_type = "client"
 
     # Tags zusammenbauen
