@@ -27,6 +27,7 @@ Aufruf:
 import argparse
 import configparser
 import json
+import http.client
 import logging
 import os
 import shutil
@@ -94,8 +95,8 @@ def load_config() -> dict:
 class MikroTikREST:
     def __init__(self, host: str, username: str, password: str,
                  use_https: bool = True, port: int = 443, verify_ssl: bool = False):
-        scheme = "https" if use_https else "http"
-        self.base = f"{scheme}://{host}:{port}/rest"
+        self._host = host
+        self._port = port
         self.use_https = use_https
         creds = base64.b64encode(f"{username}:{password}".encode()).decode()
         self.headers = {
@@ -110,20 +111,31 @@ class MikroTikREST:
                 self._ssl_ctx.verify_mode = ssl.CERT_NONE
 
     def get(self, path: str) -> list[dict]:
-        url = self.base + path
-        req = urllib.request.Request(url, headers=self.headers)
+        """HTTP GET via http.client (umgeht urllib SSL-Handler)."""
+        url_path = "/rest" + path
         try:
-            kwargs = {"timeout": 15}
-            if self._ssl_ctx:
-                kwargs["context"] = self._ssl_ctx
-            with urllib.request.urlopen(req, **kwargs) as resp:
+            if self.use_https:
+                conn = http.client.HTTPSConnection(
+                    self._host, self._port, context=self._ssl_ctx, timeout=15
+                )
+            else:
+                conn = http.client.HTTPConnection(
+                    self._host, self._port, timeout=15
+                )
+            conn.request("GET", url_path, headers=self.headers)
+            resp = conn.getresponse()
+            if resp.status == 200:
                 return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            log.warning("REST %s -> HTTP %d", path, e.code)
+            log.warning("REST %s -> HTTP %d", path, resp.status)
             return []
         except Exception as e:
             log.warning("REST %s -> %s", path, e)
             return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def collect(self) -> dict:
         """Sammelt alle relevanten Daten vom MikroTik."""
