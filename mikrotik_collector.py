@@ -96,21 +96,27 @@ class MikroTikREST:
                  use_https: bool = True, port: int = 443, verify_ssl: bool = False):
         scheme = "https" if use_https else "http"
         self.base = f"{scheme}://{host}:{port}/rest"
+        self.use_https = use_https
         creds = base64.b64encode(f"{username}:{password}".encode()).decode()
         self.headers = {
             "Authorization": f"Basic {creds}",
             "Content-Type": "application/json",
         }
-        self._ssl_ctx = ssl.create_default_context()
-        if not verify_ssl:
-            self._ssl_ctx.check_hostname = False
-            self._ssl_ctx.verify_mode = ssl.CERT_NONE
+        self._ssl_ctx = None
+        if use_https:
+            self._ssl_ctx = ssl.create_default_context()
+            if not verify_ssl:
+                self._ssl_ctx.check_hostname = False
+                self._ssl_ctx.verify_mode = ssl.CERT_NONE
 
     def get(self, path: str) -> list[dict]:
         url = self.base + path
         req = urllib.request.Request(url, headers=self.headers)
         try:
-            with urllib.request.urlopen(req, context=self._ssl_ctx, timeout=15) as resp:
+            kwargs = {"timeout": 15}
+            if self._ssl_ctx:
+                kwargs["context"] = self._ssl_ctx
+            with urllib.request.urlopen(req, **kwargs) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             log.warning("REST %s -> HTTP %d", path, e.code)
