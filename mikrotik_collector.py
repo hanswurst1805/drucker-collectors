@@ -125,7 +125,12 @@ class MikroTikREST:
             conn.request("GET", url_path, headers=self.headers)
             resp = conn.getresponse()
             if resp.status == 200:
-                return json.loads(resp.read())
+                data = json.loads(resp.read())
+                # MikroTik gibt für Einzel-Ressourcen ein Dict zurück,
+                # für Collections ein Array – wir normalisieren auf Liste
+                if isinstance(data, dict):
+                    return [data]
+                return data if isinstance(data, list) else []
             log.warning("REST %s -> HTTP %d", path, resp.status)
             return []
         except Exception as e:
