@@ -49,9 +49,10 @@ log = logging.getLogger("netasset-collector")
 # ---------------------------------------------------------------------------
 
 CONF_PATHS = [
-    Path(__file__).parent / "netasset_collector.conf",
-    Path("/etc/netasset/collector.conf"),
-    Path(os.environ.get("APPDATA", "C:/ProgramData")) / "NetAsset/collector.conf",
+    Path(__file__).parent / "netasset_collector.conf",          # neben dem Script
+    Path("/etc/netasset/netasset_collector.conf"),               # Linux systemweit
+    Path.home() / "Library/NetAsset/netasset_collector.conf",   # macOS
+    Path(os.environ.get("APPDATA", "C:/ProgramData")) / "NetAsset/netasset_collector.conf",  # Windows
 ]
 
 

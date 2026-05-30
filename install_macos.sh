@@ -49,11 +49,11 @@ cp netasset_collector.py "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/netasset_collector.py"
 
 # 4. Konfiguration anlegen
-if [ ! -f "$CONF_DIR/collector.conf" ]; then
-    cp netasset_collector.conf.example "$CONF_DIR/collector.conf"
+if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
+    cp netasset_collector.conf.example "$CONF_DIR/netasset_collector.conf"
     echo ""
     echo "  WICHTIG: Konfiguration anpassen:"
-    echo "  open -e $CONF_DIR/collector.conf"
+    echo "  open -e $CONF_DIR/netasset_collector.conf"
     echo "  -> api_key eintragen (NetAsset -> Einstellungen -> API Keys)"
     echo ""
 fi
@@ -92,7 +92,7 @@ echo ""
 echo "==> Setup abgeschlossen!"
 echo ""
 echo "Naechste Schritte:"
-echo "  1. open -e $CONF_DIR/collector.conf"
+echo "  1. open -e $CONF_DIR/netasset_collector.conf"
 echo "  2. Testlauf: python3 $INSTALL_DIR/netasset_collector.py --dry-run"
 echo "  3. Erster Upload: python3 $INSTALL_DIR/netasset_collector.py"
 echo "  4. Der LaunchAgent laeuft stündlich automatisch"

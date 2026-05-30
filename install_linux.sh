@@ -48,11 +48,11 @@ cp netasset_collector.py "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/netasset_collector.py"
 
 # 4. Konfiguration anlegen (wenn noch nicht vorhanden)
-if [ ! -f "$CONF_DIR/collector.conf" ]; then
-    cp netasset_collector.conf.example "$CONF_DIR/collector.conf"
+if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
+    cp netasset_collector.conf.example "$CONF_DIR/netasset_collector.conf"
     echo ""
     echo "  WICHTIG: Konfiguration anpassen:"
-    echo "  nano $CONF_DIR/collector.conf"
+    echo "  nano $CONF_DIR/netasset_collector.conf"
     echo "  → api_key eintragen (aus NetAsset → Einstellungen → API Keys)"
     echo ""
 fi
@@ -68,7 +68,7 @@ echo ""
 echo "==> Installation abgeschlossen!"
 echo ""
 echo "Nächste Schritte:"
-echo "  1. nano $CONF_DIR/collector.conf  (api_key eintragen)"
+echo "  1. nano $CONF_DIR/netasset_collector.conf  (api_key eintragen)"
 echo "  2. Testlauf: python3 $INSTALL_DIR/netasset_collector.py --dry-run"
 echo "  3. Erster Upload: python3 $INSTALL_DIR/netasset_collector.py"
 echo "  4. Danach läuft der Cron-Job stündlich automatisch"

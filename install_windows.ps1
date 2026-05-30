@@ -48,7 +48,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Copy-Item "$ScriptDir\netasset_collector.py" "$InstallDir\" -Force
 
 # 4. Configuration
-$ConfFile = "$ConfDir\collector.conf"
+$ConfFile = "$ConfDir\netasset_collector.conf"
 if (-not (Test-Path $ConfFile)) {
     Copy-Item "$ScriptDir\netasset_collector.conf.example" $ConfFile -Force
     Write-Host ""
