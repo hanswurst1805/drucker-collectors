@@ -1,0 +1,36 @@
+[mikrotik]
+# IP-Adresse oder Hostname des MikroTik
+host = 192.168.1.1
+
+# REST API Zugangsdaten (RouterOS 7.1+)
+username = admin
+password = DEIN_PASSWORT
+
+# HTTPS verwenden (empfohlen)
+use_https = true
+
+# SSL-Zertifikat prüfen (false = selbstsignierte Zerts akzeptieren)
+verify_ssl = false
+
+# REST API Port (Standard: 443 für HTTPS, 80 für HTTP)
+port_rest = 443
+
+# Modus: rest (RouterOS 7.1+) oder snmp (alle Versionen)
+mode = rest
+
+# SNMP Community (nur wenn mode = snmp)
+snmp_community = public
+snmp_port = 161
+
+[netasset]
+# NetAsset-Server
+api_url = https://ocs.kiste.org
+
+# API-Key (Einstellungen -> API Keys)
+api_key = sk-na-DEIN_KEY_HIER
+
+# Exposure-Level des MikroTik selbst
+exposure_level = INTERN
+
+# Tags für den MikroTik und entdeckte Nachbarn
+tags = mikrotik,router,netzwerk
