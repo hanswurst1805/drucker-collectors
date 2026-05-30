@@ -57,7 +57,7 @@ if (-not (Test-Path $ConfFile)) {
     Write-Host ""
     Write-Host "  WICHTIG: Konfiguration anpassen:" -ForegroundColor Yellow
     Write-Host "  notepad $ConfFile"
-    Write-Host "  → api_key eintragen (aus NetAsset → Einstellungen → API Keys)"
+    Write-Host "  -> api_key eintragen (aus NetAsset -> Einstellungen -> API Keys)"
     Write-Host ""
 }
 
