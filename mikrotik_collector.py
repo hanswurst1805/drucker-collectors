@@ -58,13 +58,17 @@ CONF_PATHS = [
 ]
 
 
-def load_config() -> dict:
+def load_config(config_file: str | None = None) -> dict:
     cfg = configparser.ConfigParser()
-    for path in CONF_PATHS:
-        if path.exists():
-            cfg.read(path)
-            log.info("Konfiguration: %s", path)
-            break
+    if config_file:
+        cfg.read(config_file)
+        log.info("Konfiguration: %s", config_file)
+    else:
+        for path in CONF_PATHS:
+            if path.exists():
+                cfg.read(path)
+                log.info("Konfiguration: %s", path)
+                break
 
     s = cfg["mikrotik"] if "mikrotik" in cfg else {}
     na = cfg["netasset"] if "netasset" in cfg else {}
@@ -617,6 +621,7 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
 
 def main():
     parser = argparse.ArgumentParser(description="NetAsset MikroTik Collector")
+    parser.add_argument("--config", "-c", help="Pfad zur Konfigurationsdatei")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-neighbors", action="store_true", help="Keine Nachbarn pushen")
     parser.add_argument("--snmp", action="store_true", help="SNMP statt REST API erzwingen")
@@ -626,7 +631,7 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    config = load_config()
+    config = load_config(args.config)
 
     if not config["host"]:
         log.error("MIKROTIK_HOST nicht gesetzt. In mikrotik_collector.conf eintragen.")
