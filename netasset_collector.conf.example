@@ -1,0 +1,19 @@
+[netasset]
+# NetAsset-Server URL
+api_url = https://ocs.kiste.org
+
+# API-Key (unter Einstellungen → API Keys anlegen)
+api_key = sk-na-DEIN_KEY_HIER
+
+# Tags für dieses System (kommagetrennt)
+# Beispiel: kunde-a,standort-kiel,production
+tags = intern
+
+# Exposure-Level: INTERN | DMZ | EXTERN
+exposure_level = INTERN
+
+# Pfad zu osqueryi (leer = automatisch suchen)
+# osquery_bin = /usr/bin/osqueryi
+
+# HTTP-Timeout in Sekunden
+timeout = 30
