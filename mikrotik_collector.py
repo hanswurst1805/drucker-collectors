@@ -72,9 +72,21 @@ def load_config(config_file: str | None = None) -> dict:
 
     s = cfg["mikrotik"] if "mikrotik" in cfg else {}
     na = cfg["netasset"] if "netasset" in cfg else {}
+
+    # Hosts: entweder "host = ..." (einzeln) oder "hosts = ..." (mehrzeilig/komma)
+    single_host = os.environ.get("MIKROTIK_HOST", s.get("host", ""))
+    multi_hosts_raw = s.get("hosts", "")
+    if multi_hosts_raw:
+        hosts = [h.strip() for h in multi_hosts_raw.replace(",", "\n").splitlines() if h.strip()]
+    elif single_host:
+        hosts = [single_host]
+    else:
+        hosts = []
+
     return {
-        # MikroTik
-        "host": os.environ.get("MIKROTIK_HOST", s.get("host", "")),
+        # MikroTik – gemeinsame Zugangsdaten
+        "host":  hosts[0] if hosts else "",   # Kompatibilität mit Single-Host-Logik
+        "hosts": hosts,
         "username": os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
         "password": os.environ.get("MIKROTIK_PASS", s.get("password", "")),
         "use_https": s.get("use_https", "true").lower() == "true",
@@ -82,7 +94,7 @@ def load_config(config_file: str | None = None) -> dict:
         "port_rest": int(s.get("port_rest", "443")),
         "snmp_community": s.get("snmp_community", "public"),
         "snmp_port": int(s.get("snmp_port", "161")),
-        "mode": s.get("mode", "rest"),  # rest | snmp
+        "mode": s.get("mode", "rest"),
         # NetAsset
         "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")),
         "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
@@ -633,41 +645,50 @@ def main():
 
     config = load_config(args.config)
 
-    if not config["host"]:
-        log.error("MIKROTIK_HOST nicht gesetzt. In mikrotik_collector.conf eintragen.")
+    if not config["hosts"]:
+        log.error("Kein Host konfiguriert. 'host' oder 'hosts' in der Config eintragen.")
         sys.exit(1)
 
     if not config["api_key"] and not args.dry_run:
         log.error("NETASSET_API_KEY nicht gesetzt.")
         sys.exit(1)
 
-    log.info("MikroTik: %s", config["host"])
+    hosts = config["hosts"]
+    log.info("Starte Scan: %d MikroTik-Gerät(e)", len(hosts))
 
-    try:
-        if args.snmp or config["mode"] == "snmp":
-            data = collect_snmp(config["host"], config["snmp_community"], config["snmp_port"])
-        else:
-            client = MikroTikREST(
-                config["host"], config["username"], config["password"],
-                use_https=config["use_https"],
-                port=config["port_rest"],
-                verify_ssl=config["verify_ssl"],
-            )
-            data = client.collect()
-    except Exception as e:
-        log.error("Fehler beim Sammeln: %s", e)
-        sys.exit(1)
+    errors = 0
+    for host in hosts:
+        log.info("─── %s ───", host)
+        # Host temporär in Config setzen für push()
+        host_config = {**config, "host": host}
 
-    dev = data["device"]
-    log.info(
-        "Gesammelt: %s (%s %s), %d Nachbarn",
-        dev.get("hostname"), dev.get("os_name"), dev.get("os_version"),
-        len(data.get("neighbors", [])),
-    )
+        try:
+            if args.snmp or config["mode"] == "snmp":
+                data = collect_snmp(host, config["snmp_community"], config["snmp_port"])
+            else:
+                client = MikroTikREST(
+                    host, config["username"], config["password"],
+                    use_https=config["use_https"],
+                    port=config["port_rest"],
+                    verify_ssl=config["verify_ssl"],
+                )
+                data = client.collect()
+        except Exception as e:
+            log.error("Fehler bei %s: %s", host, e)
+            errors += 1
+            continue
 
-    push(config, data, push_neighbors=not args.no_neighbors, dry_run=args.dry_run)
+        dev = data["device"]
+        log.info(
+            "Gesammelt: %s (%s %s), %d Nachbarn",
+            dev.get("hostname"), dev.get("os_name"), dev.get("os_version"),
+            len(data.get("neighbors", [])),
+        )
+
+        push(host_config, data, push_neighbors=not args.no_neighbors, dry_run=args.dry_run)
+
     if not args.dry_run:
-        log.info("Fertig.")
+        log.info("Fertig. %d/%d Geräte erfolgreich.", len(hosts) - errors, len(hosts))
 
 
 if __name__ == "__main__":

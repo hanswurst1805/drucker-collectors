@@ -1,0 +1,25 @@
+[mikrotik]
+# Gemeinsame Zugangsdaten fuer alle Geraete
+username = netasset
+password = SICHERES_PASSWORT
+use_https = false
+port_rest = 80
+verify_ssl = false
+mode = rest
+
+# SNMP-Fallback (falls REST nicht klappt)
+snmp_community = public
+snmp_port = 161
+
+# Alle MikroTik-Geraete – eine IP pro Zeile oder kommagetrennt
+hosts =
+    192.168.178.23
+    192.168.178.24
+    192.168.178.25
+
+[netasset]
+api_url = https://ocs.kiste.org
+api_key = sk-na-DEIN_KEY_HIER
+exposure_level = INTERN
+tags = mikrotik,netzwerk
+timeout = 15
