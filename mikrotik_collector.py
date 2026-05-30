@@ -123,34 +123,38 @@ class MikroTikREST:
         """Sammelt alle relevanten Daten vom MikroTik."""
         log.info("Verbinde per REST API...")
 
-        resource   = self.get("/system/resource")
-        identity   = self.get("/system/identity")
-        routerboard= self.get("/system/routerboard")
-        addresses  = self.get("/ip/address")
-        interfaces = self.get("/interface")
-        arp        = self.get("/ip/arp")
-        dhcp       = self.get("/ip/dhcp-server/lease")
+        resource    = self.get("/system/resource")
+        identity    = self.get("/system/identity")
+        routerboard = self.get("/system/routerboard")
+        addresses   = self.get("/ip/address")
+        interfaces  = self.get("/interface")
+        arp         = self.get("/ip/arp")
+        dhcp        = self.get("/ip/dhcp-server/lease")
+        bridges     = self.get("/interface/bridge")
+        bridge_hosts= self.get("/interface/bridge/host")  # MAC-Adresstabelle
+        bridge_ports= self.get("/interface/bridge/port")
+        vlans       = self.get("/interface/bridge/vlan")
 
         res = resource[0] if resource else {}
         idn = identity[0] if identity else {}
         rb  = routerboard[0] if routerboard else {}
 
-        # Primäre IP: Interface mit default-route (ether1 oder erste nicht-lo)
-        primary_ip = None
-        primary_mac = None
-        for addr in addresses:
-            if not addr.get("disabled") and addr.get("address"):
-                ip = addr["address"].split("/")[0]
-                iface_name = addr.get("interface", "")
-                # MAC des Interface finden
-                for iface in interfaces:
-                    if iface.get("name") == iface_name and iface.get("mac-address"):
-                        primary_mac = iface["mac-address"].lower()
-                        break
-                primary_ip = ip
-                break  # erste aktive Adresse nehmen
+        # Gerätetyp anhand Board-Name ermitteln
+        board_name = (res.get("board-name") or rb.get("model") or "").upper()
+        asset_type = _detect_asset_type(board_name, bridges, interfaces)
+        log.info("Erkannter Gerätetyp: %s (Board: %s)", asset_type, board_name)
 
-        # Open Ports aus laufenden Services ableiten
+        # Primäre IP + MAC
+        primary_ip, primary_mac = _find_primary_ip(addresses, interfaces)
+
+        # VLAN-Info als Tags
+        vlan_tags = []
+        for vlan in vlans:
+            vid = vlan.get("vlan-ids")
+            if vid:
+                vlan_tags.append(f"vlan-{vid}")
+
+        # Offene Services
         services = self.get("/ip/service")
         open_ports = []
         for svc in services:
@@ -161,6 +165,10 @@ class MikroTikREST:
                     "service": svc.get("name"),
                     "reachable_from": ["intern"],
                 })
+
+        # Nachbarn: ARP + DHCP + Bridge MAC-Tabelle
+        neighbors = _parse_neighbors(arp, dhcp)
+        neighbors = _enrich_with_bridge_hosts(neighbors, bridge_hosts, bridge_ports)
 
         return {
             "device": {
@@ -175,9 +183,94 @@ class MikroTikREST:
                 "os_name": "RouterOS",
                 "os_version": res.get("version"),
                 "open_ports": open_ports,
+                "_asset_type": asset_type,
+                "_vlan_tags": vlan_tags,
+                "_bridge_count": len(bridges),
+                "_port_count": sum(1 for i in interfaces
+                                   if i.get("type") in ("ether", "sfp", "sfp-sfpplus")),
             },
-            "neighbors": _parse_neighbors(arp, dhcp),
+            "neighbors": neighbors,
         }
+
+
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen
+# ---------------------------------------------------------------------------
+
+def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
+    """Ermittelt ob das Gerät Router oder Switch ist."""
+    # CRS = Cloud Router Switch, CSS = Cloud Smart Switch → Switch
+    if board_name.startswith(("CRS", "CSS")):
+        return "switch"
+    # RB = RouterBoard, CCR = Cloud Core Router → Router
+    if board_name.startswith(("CCR", "RB4011", "RB5009", "RB1100")):
+        return "router"
+    # Heuristik: wenn Bridges vorhanden und mehr als 4 Ethernet-Ports → Switch
+    eth_ports = sum(1 for i in interfaces
+                    if i.get("type") in ("ether", "sfp", "sfp-sfpplus"))
+    if bridges and eth_ports >= 4:
+        return "switch"
+    return "router"
+
+
+def _find_primary_ip(addresses: list, interfaces: list) -> tuple[str | None, str | None]:
+    """Findet die primäre IP + MAC (erste aktive, nicht-loopback Adresse)."""
+    for addr in addresses:
+        if addr.get("disabled") or not addr.get("address"):
+            continue
+        ip = addr["address"].split("/")[0]
+        iface_name = addr.get("interface", "")
+        mac = None
+        for iface in interfaces:
+            if iface.get("name") == iface_name and iface.get("mac-address"):
+                mac = iface["mac-address"].lower()
+                break
+        return ip, mac
+    return None, None
+
+
+def _enrich_with_bridge_hosts(
+    neighbors: list[dict],
+    bridge_hosts: list[dict],
+    bridge_ports: list[dict],
+) -> list[dict]:
+    """
+    Ergänzt Nachbarn um Port-Info aus der Bridge MAC-Tabelle.
+    Fügt auch Geräte hinzu die nur im Bridge-Table stehen (kein ARP-Eintrag).
+    """
+    # Port-ID -> Interface-Name Mapping
+    port_map = {p.get(".id"): p.get("interface") for p in bridge_ports}
+
+    existing_macs = {n.get("mac") for n in neighbors if n.get("mac")}
+
+    for host in bridge_hosts:
+        mac = (host.get("mac-address") or "").lower()
+        if not mac or mac == "ff:ff:ff:ff:ff:ff":
+            continue
+        # Eigene Bridge-MAC überspringen (local=true)
+        if host.get("local") == "true":
+            continue
+
+        port_iface = port_map.get(host.get("on-interface")) or host.get("on-interface") or ""
+
+        if mac in existing_macs:
+            # Port-Info zu bestehendem Nachbar ergänzen
+            for n in neighbors:
+                if n.get("mac") == mac:
+                    n["_switch_port"] = port_iface
+                    break
+        else:
+            # Neuer Nachbar nur aus Bridge-Table (kein ARP, z.B. Tagged VLAN)
+            neighbors.append({
+                "ip": None,
+                "mac": mac,
+                "hostname": None,
+                "comment": f"Bridge-Port: {port_iface}",
+                "_switch_port": port_iface,
+            })
+            existing_macs.add(mac)
+
+    return neighbors
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +415,16 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
     device = data["device"]
     neighbors = data.get("neighbors", [])
 
-    # Tags
+    # Asset-Typ + Tags aus gesammelten Daten
+    asset_type = device.pop("_asset_type", "router")
+    vlan_tags  = device.pop("_vlan_tags", [])
+    device.pop("_bridge_count", None)
+    device.pop("_port_count", None)
+
+    device["asset_type"]     = asset_type
     device["exposure_level"] = config["exposure_level"]
-    device["tags"] = config["tags"]
-    device["source"] = "mikrotik-collector"
-    device["asset_type"] = "router"
+    device["tags"]           = config["tags"] + vlan_tags + [asset_type]
+    device["source"]         = "mikrotik-collector"
 
     if dry_run:
         print("\n=== DRY RUN ===\n")
