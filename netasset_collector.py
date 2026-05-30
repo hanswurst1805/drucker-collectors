@@ -101,6 +101,7 @@ def osquery(sql: str, osquery_bin: str) -> list[dict]:
         result = subprocess.run(
             [osquery_bin, "--json", sql],
             capture_output=True, text=True, timeout=30,
+            encoding='utf-8', errors='replace',
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
