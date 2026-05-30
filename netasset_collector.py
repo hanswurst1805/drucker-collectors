@@ -146,25 +146,57 @@ def collect_os_info(q) -> dict:
 
 
 def collect_network(q) -> tuple[str | None, str | None, list[dict]]:
-    """IP, MAC und offene Ports via osquery."""
-    # Interface-Adressen
-    ifaces = q("""
-        SELECT ia.address, ia.interface, id.mac
-        FROM interface_addresses ia
-        JOIN interface_details id ON ia.interface = id.interface
-        WHERE ia.address NOT LIKE '127.%'
-          AND ia.address NOT LIKE '::1'
-          AND ia.address NOT LIKE 'fe80%'
-          AND id.mac != '00:00:00:00:00:00'
-        ORDER BY id.last_change DESC
+    """IP, MAC und offene Ports via osquery.
+    Nutzt die Default-Route um das primäre IPv4-Interface zu bestimmen.
+    """
+    # 1. Default-Route Interface ermitteln (destination 0.0.0.0 = Default-GW)
+    default_iface = None
+    routes = q("""
+        SELECT interface FROM routes
+        WHERE destination = '0.0.0.0'
+          AND netmask = '0'
+          AND type = 'gateway'
+        ORDER BY metric ASC
         LIMIT 1
     """)
+    if routes:
+        default_iface = routes[0].get("interface")
 
+    # 2. IPv4-Adresse des Default-Route-Interface holen
     ip_address = None
     mac_address = None
-    if ifaces:
-        ip_address = ifaces[0].get("address")
-        mac_address = ifaces[0].get("mac")
+
+    if default_iface:
+        ifaces = q(f"""
+            SELECT ia.address, id.mac
+            FROM interface_addresses ia
+            JOIN interface_details id ON ia.interface = id.interface
+            WHERE ia.interface = '{default_iface}'
+              AND ia.address NOT LIKE '127.%'
+              AND ia.address NOT LIKE '%:%'
+              AND length(ia.address) <= 15
+            LIMIT 1
+        """)
+        if ifaces:
+            ip_address = ifaces[0].get("address")
+            mac_address = ifaces[0].get("mac")
+
+    # Fallback: erste brauchbare IPv4-Adresse wenn Default-Route nicht gefunden
+    if not ip_address:
+        ifaces = q("""
+            SELECT ia.address, ia.interface, id.mac
+            FROM interface_addresses ia
+            JOIN interface_details id ON ia.interface = id.interface
+            WHERE ia.address NOT LIKE '127.%'
+              AND ia.address NOT LIKE '%:%'
+              AND length(ia.address) <= 15
+              AND id.mac != '00:00:00:00:00:00'
+            ORDER BY id.last_change DESC
+            LIMIT 1
+        """)
+        if ifaces:
+            ip_address = ifaces[0].get("address")
+            mac_address = ifaces[0].get("mac")
 
     # Offene Ports (listening)
     ports_raw = q("""
