@@ -1,0 +1,17 @@
+[Unit]
+Description=NetAsset Network Discovery Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/netasset-collector
+ExecStart=/usr/bin/python3 /opt/netasset-collector/network_discovery_agent.py --daemon
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
