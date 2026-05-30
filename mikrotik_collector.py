@@ -177,21 +177,50 @@ class MikroTikREST:
             if vid:
                 vlan_tags.append(f"vlan-{vid}")
 
-        # Offene Services
-        services = self.get("/ip/service")
+        # Offene Ports aus Services
+        services  = self.get("/ip/service")
+        # Firewall-Filter: extern erreichbare Ports (chain=input, action=accept)
+        fw_input  = self.get("/ip/firewall/filter")
+        # LLDP/CDP-Nachbarn
+        lldp      = self.get("/ip/neighbor")
+        # WLAN-Clients (nur bei WLAN-fähigen Geräten)
+        wlan_clients = self.get("/interface/wireless/registration-table")
+
+        # Services → offene Ports
+        extern_ports = _extern_ports_from_firewall(fw_input)
         open_ports = []
         for svc in services:
-            if not svc.get("disabled") and svc.get("port"):
-                open_ports.append({
-                    "port": int(svc["port"]),
-                    "proto": "tcp",
-                    "service": svc.get("name"),
-                    "reachable_from": ["intern"],
-                })
+            if svc.get("disabled") == "true" or svc.get("disabled") is True:
+                continue
+            port_val = svc.get("port")
+            if not port_val:
+                continue
+            port_num = int(port_val)
+            # Ist der Port in Firewall-Accept-Regeln für extern?
+            reachable = ["extern"] if port_num in extern_ports else ["intern"]
+            open_ports.append({
+                "port": port_num,
+                "proto": "tcp",
+                "service": svc.get("name"),
+                "reachable_from": reachable,
+            })
 
-        # Nachbarn: ARP + DHCP + Bridge MAC-Tabelle
+        # System-Health als Metadaten
+        uptime   = res.get("uptime", "")
+        cpu_load = res.get("cpu-load", "")
+        mem_free = res.get("free-memory", "")
+        mem_total= res.get("total-memory", "")
+
+        log.info(
+            "System: uptime=%s cpu=%s%% mem=%s/%s",
+            uptime, cpu_load, mem_free, mem_total
+        )
+
+        # Nachbarn: ARP + DHCP + Bridge MAC + LLDP + WLAN-Clients
         neighbors = _parse_neighbors(arp, dhcp)
         neighbors = _enrich_with_bridge_hosts(neighbors, bridge_hosts, bridge_ports)
+        neighbors = _enrich_with_lldp(neighbors, lldp)
+        neighbors = _enrich_with_wlan(neighbors, wlan_clients)
 
         return {
             "device": {
@@ -250,6 +279,91 @@ def _find_primary_ip(addresses: list, interfaces: list) -> tuple[str | None, str
                 break
         return ip, mac
     return None, None
+
+
+def _extern_ports_from_firewall(fw_rules: list[dict]) -> set[int]:
+    """Extrahiert Ports die per Firewall-Accept-Regel von extern erreichbar sind."""
+    extern = set()
+    for rule in fw_rules:
+        if (rule.get("chain") == "input"
+                and rule.get("action") == "accept"
+                and not rule.get("disabled")
+                and rule.get("dst-port")):
+            for p in str(rule["dst-port"]).split(","):
+                p = p.strip()
+                if p.isdigit():
+                    extern.add(int(p))
+                elif "-" in p:
+                    try:
+                        lo, hi = p.split("-")
+                        extern.update(range(int(lo), int(hi) + 1))
+                    except ValueError:
+                        pass
+    return extern
+
+
+def _enrich_with_lldp(neighbors: list[dict], lldp: list[dict]) -> list[dict]:
+    """Ergänzt Nachbarn mit LLDP/CDP-Daten (Hostname, Interface)."""
+    existing_ips = {n.get("ip") for n in neighbors if n.get("ip")}
+
+    for entry in lldp:
+        ip = entry.get("address") or entry.get("ipv4-address")
+        mac = (entry.get("mac-address") or "").lower() or None
+        hostname = entry.get("identity") or entry.get("system-name") or None
+        iface = entry.get("interface", "")
+        platform = entry.get("system-description", "")
+
+        if ip and ip not in existing_ips:
+            neighbors.append({
+                "ip": ip,
+                "mac": mac,
+                "hostname": hostname,
+                "comment": f"LLDP via {iface}" + (f" ({platform[:40]})" if platform else ""),
+                "_source": "lldp",
+            })
+        elif ip:
+            for n in neighbors:
+                if n.get("ip") == ip:
+                    if not n.get("hostname") and hostname:
+                        n["hostname"] = hostname
+                    n["_lldp_iface"] = iface
+                    break
+
+    return neighbors
+
+
+def _enrich_with_wlan(neighbors: list[dict], clients: list[dict]) -> list[dict]:
+    """Ergänzt/fügt WLAN-Clients aus der Registration-Tabelle hinzu."""
+    existing_macs = {n.get("mac") for n in neighbors if n.get("mac")}
+
+    for c in clients:
+        mac = (c.get("mac-address") or "").lower()
+        if not mac:
+            continue
+        signal = c.get("signal-strength", "")
+        iface = c.get("interface", "")
+        tx_rate = c.get("tx-rate", "")
+
+        comment = f"WLAN {iface}" + (f" Signal: {signal}" if signal else "")
+
+        if mac not in existing_macs:
+            neighbors.append({
+                "ip": None,
+                "mac": mac,
+                "hostname": None,
+                "comment": comment,
+                "_source": "wlan",
+                "_wlan_signal": signal,
+                "_wlan_tx_rate": tx_rate,
+            })
+        else:
+            for n in neighbors:
+                if n.get("mac") == mac:
+                    n["_wlan_signal"] = signal
+                    n["_wlan_tx_rate"] = tx_rate
+                    break
+
+    return neighbors
 
 
 def _enrich_with_bridge_hosts(
