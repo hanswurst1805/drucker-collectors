@@ -118,15 +118,28 @@ def osquery(sql: str, osquery_bin: str) -> list[dict]:
 
 def collect_system_info(q) -> dict:
     """Basis-Systeminfos via osquery."""
-    rows = q("SELECT hostname, cpu_brand, cpu_physical_cores, physical_memory, hardware_vendor, hardware_model, hardware_serial FROM system_info LIMIT 1")
+    rows = q("SELECT hostname, uuid, cpu_brand, cpu_physical_cores, physical_memory, hardware_vendor, hardware_model, hardware_serial FROM system_info LIMIT 1")
     if not rows:
         return {}
     row = rows[0]
+
+    # serial_number: Hardware-Seriennummer wenn vorhanden
+    serial = row.get("hardware_serial") or None
+    if serial in ("", "0", "Default string", "To be filled by O.E.M.",
+                  "System Serial Number", "None", "N/A"):
+        serial = None
+
+    # chassis_id: systemweite UUID – stabiler Identifier, verhindert Fehl-Merges
+    uuid = row.get("uuid") or None
+    if uuid in ("", "0", "00000000-0000-0000-0000-000000000000"):
+        uuid = None
+
     return {
         "hostname": row.get("hostname"),
         "manufacturer": row.get("hardware_vendor"),
         "model": row.get("hardware_model"),
-        "serial_number": row.get("hardware_serial") or None,
+        "serial_number": serial,
+        "chassis_id": uuid,   # Stable Key im Identity Resolver
         "_cpu": row.get("cpu_brand"),
         "_ram_bytes": row.get("physical_memory"),
     }
@@ -414,6 +427,7 @@ def main():
         "ip_address": ip,
         "mac_address": mac,
         "serial_number": sys_info.get("serial_number"),
+        "chassis_id": sys_info.get("chassis_id"),  # System-UUID als Stable Key
         "asset_type": asset_type,
         "os_name": os_info.get("os_name"),
         "os_version": os_info.get("os_version"),
