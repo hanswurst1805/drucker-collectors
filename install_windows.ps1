@@ -33,7 +33,7 @@ if (-not (Get-Command osqueryi.exe -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
     Write-Host "==> Installing Python..." -ForegroundColor Yellow
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        winget install Python.Python.3.12 --silent --accept-package-agreements
+        winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
     } else {
         Write-Host "NOTE: Python not found. Install manually: https://python.org"
     }
