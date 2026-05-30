@@ -1,0 +1,21 @@
+[fritzbox]
+# IP der Fritz!Box (Standard AVM: 192.168.178.1)
+host = 192.168.178.1
+
+# TR-064 Port (Standard: 49000)
+port = 49000
+
+# Benutzer + Passwort (leer lassen wenn kein Passwort gesetzt)
+# Fritz!Box: Heimnetzwerk -> Netzwerk -> Benutzer
+username =
+password = DEIN_FRITZBOX_PASSWORT
+
+# TLS verwenden (Port 49443)
+use_tls = false
+
+[netasset]
+api_url = https://ocs.kiste.org
+api_key = sk-na-DEIN_KEY_HIER
+exposure_level = INTERN
+tags = fritzbox,avm,heimnetz
+timeout = 15
