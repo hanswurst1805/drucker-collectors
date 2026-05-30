@@ -211,8 +211,13 @@ def api_post(url: str, api_key: str, data, timeout: int = 30):
         headers={"Content-Type": "application/json", "X-API-Key": api_key},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        log.error("API Fehler %d auf %s: %s", e.code, url, detail[:500])
+        raise
 
 
 def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = False):
