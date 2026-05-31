@@ -1,0 +1,4 @@
+[netasset]
+api_url = https://ocs.kiste.org
+api_key = sk-na-DEIN_KEY_HIER
+timeout = 30
