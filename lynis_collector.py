@@ -75,6 +75,7 @@ def load_config(config_file: str | None = None) -> dict:
     return {
         "api_url":  os.environ.get("NETASSET_URL", s.get("api_url", "https://ocs.kiste.org")),
         "api_key":  os.environ.get("NETASSET_API_KEY", s.get("api_key", "")),
+        "asset_id": os.environ.get("NETASSET_ASSET_ID", s.get("asset_id", "")),
         "timeout":  int(s.get("timeout", "30")),
     }
 
@@ -244,8 +245,8 @@ def main():
 
     log.info("Report: %s (%d Bytes)", report_path, report_path.stat().st_size)
 
-    # 2. Asset-ID bestimmen
-    asset_id = args.asset_id
+    # 2. Asset-ID bestimmen: CLI > Config > automatisch per Hostname/IP
+    asset_id = args.asset_id or config.get("asset_id", "")
     if not asset_id:
         log.info("Suche Asset per Hostname/IP...")
         asset_id = find_asset_id(config["api_url"], config["api_key"], config["timeout"])

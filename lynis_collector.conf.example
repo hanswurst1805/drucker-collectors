@@ -2,3 +2,7 @@
 api_url = https://ocs.kiste.org
 api_key = sk-na-DEIN_KEY_HIER
 timeout = 30
+
+# Asset-UUID (optional) – aus NetAsset-GUI: Asset öffnen, URL enthält die UUID
+# Wenn gesetzt, wird die automatische Hostname/IP-Suche übersprungen
+# asset_id = 38f77441-1765-40a2-8cc3-a8857b9b948a
