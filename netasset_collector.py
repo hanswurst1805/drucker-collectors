@@ -242,6 +242,110 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict]]:
     return ip_address, mac_address, open_ports
 
 
+def collect_update_status(q) -> dict:
+    """
+    Ermittelt ausstehende Updates und Reboot-Status.
+    Funktioniert auf Linux (apt/yum), macOS und Windows.
+    """
+    status = {
+        "pending_updates": None,
+        "reboot_required": False,
+        "security_updates": None,
+        "platform": platform.system(),
+    }
+
+    if platform.system() == "Linux":
+        # Reboot erforderlich (Ubuntu/Debian)
+        reboot_file = q("SELECT path FROM file WHERE path = '/var/run/reboot-required'")
+        status["reboot_required"] = len(reboot_file) > 0
+
+        # Anzahl ausstehender Updates (Ubuntu update-notifier)
+        notifier = q("""
+            SELECT content FROM yara
+            WHERE path = '/var/lib/update-notifier/updates-available'
+        """)
+        if not notifier:
+            # Fallback: Datei direkt lesen
+            try:
+                with open("/var/lib/update-notifier/updates-available") as f:
+                    content = f.read()
+                    import re as _re
+                    m = _re.search(r'(\d+) packages can be updated', content)
+                    if m:
+                        status["pending_updates"] = int(m.group(1))
+                    ms = _re.search(r'(\d+) of these updates are standard security updates', content)
+                    if ms:
+                        status["security_updates"] = int(ms.group(1))
+            except Exception:
+                pass
+
+        # Fallback: apt-check wenn installiert
+        if status["pending_updates"] is None:
+            apt_check = q("""
+                SELECT stdout FROM process_open_sockets
+                LIMIT 0
+            """)  # Dummy — echtes apt-check via subprocess
+            try:
+                import subprocess as _sp
+                r = _sp.run(
+                    ["/usr/lib/update-notifier/apt-check", "--human-readable"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if r.returncode == 0 and r.stderr:
+                    import re as _re
+                    m = _re.search(r'(\d+) packages can be updated', r.stderr)
+                    if m:
+                        status["pending_updates"] = int(m.group(1))
+                    ms = _re.search(r'(\d+) of these updates are security updates', r.stderr)
+                    if ms:
+                        status["security_updates"] = int(ms.group(1))
+            except Exception:
+                pass
+
+        # RHEL/CentOS: yum check-update
+        if status["pending_updates"] is None:
+            try:
+                import subprocess as _sp
+                r = _sp.run(
+                    ["yum", "check-update", "--quiet"],
+                    capture_output=True, text=True, timeout=30
+                )
+                # Exit code 100 = updates verfügbar
+                if r.returncode in (0, 100):
+                    lines = [l for l in r.stdout.strip().splitlines() if l and not l.startswith("Last")]
+                    status["pending_updates"] = len(lines)
+            except Exception:
+                pass
+
+    elif platform.system() == "Windows":
+        # osquery windows_updates Tabelle
+        updates = q("SELECT hot_fix_id, installed_on FROM wmi_hotfixes WHERE installed_on IS NULL")
+        status["pending_updates"] = len(updates)
+
+        # Reboot pending (Windows)
+        reboot_pending = q("""
+            SELECT data FROM registry
+            WHERE key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager'
+            AND name = 'PendingFileRenameOperations'
+        """)
+        status["reboot_required"] = len(reboot_pending) > 0
+
+    elif platform.system() == "Darwin":
+        # macOS: softwareupdate
+        try:
+            import subprocess as _sp
+            r = _sp.run(
+                ["softwareupdate", "--list"],
+                capture_output=True, text=True, timeout=30
+            )
+            lines = [l for l in r.stdout.splitlines() if "* " in l or "Title:" in l]
+            status["pending_updates"] = len(lines)
+        except Exception:
+            pass
+
+    return status
+
+
 def collect_packages(q) -> list[dict]:
     """Installierte Pakete via osquery — SBOM-Einträge."""
     packages = []
@@ -440,13 +544,29 @@ def main():
         "source": "osquery",
     }
 
+    # Update-Status
+    update_status = collect_update_status(q)
+    pending = update_status.get("pending_updates")
+    security = update_status.get("security_updates")
+    reboot = update_status.get("reboot_required", False)
+
+    # Als Tags speichern (sichtbar in der UI)
+    if pending is not None:
+        tags.append(f"updates:{pending}")
+    if security is not None and security > 0:
+        tags.append(f"security-updates:{security}")
+    if reboot:
+        tags.append("reboot-required")
+
     log.info(
-        "Gesammelt: %s (%s %s), %d Ports, %d Pakete",
+        "Gesammelt: %s (%s %s), %d Ports, %d Pakete, %s ausstehende Updates%s",
         device["hostname"],
         device["os_name"] or "?",
         device["os_version"] or "?",
         len(ports),
         len(packages),
+        str(pending) if pending is not None else "?",
+        " [REBOOT]" if reboot else "",
     )
 
     if args.dry_run:
