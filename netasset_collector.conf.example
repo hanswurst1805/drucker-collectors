@@ -1,6 +1,6 @@
 [netasset]
 # NetAsset-Server URL
-api_url = https://ocs.kiste.org
+api_url = https://<SERVER-URL>
 
 # API-Key (unter Einstellungen → API Keys anlegen)
 api_key = sk-na-DEIN_KEY_HIER

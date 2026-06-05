@@ -14,7 +14,7 @@ password = DEIN_FRITZBOX_PASSWORT
 use_tls = false
 
 [netasset]
-api_url = https://ocs.kiste.org
+api_url = https://<SERVER-URL>
 api_key = sk-na-DEIN_KEY_HIER
 exposure_level = INTERN
 tags = fritzbox,avm,heimnetz
