@@ -392,15 +392,18 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
                 snmp_errors += 1
 
         # ── WALKs ─────────────────────────────────────────────────────────────
+        # pysnmp 7.x: next_cmd ist eine Coroutine (kein async-Generator).
+        # Walk = GETNEXT in Schleife bis OID außerhalb des Subtree.
         for oid in walks:
             rows: list[tuple[str, object]] = []
             row_count = 0
+            current_obj = ObjectType(ObjectIdentity(oid))
+            base_oid    = oid.rstrip(".") + "."
             try:
-                async for errorInd, errorStatus, _, varBinds in next_cmd(
-                    engine, auth, transport, ctx,
-                    ObjectType(ObjectIdentity(oid)),
-                    lexicographic_mode=False,
-                ):
+                while True:
+                    errorInd, errorStatus, _, varBinds = await next_cmd(
+                        engine, auth, transport, ctx, current_obj,
+                    )
                     if errorInd:
                         log.warning("SNMP WALK %s – %s", oid, errorInd)
                         snmp_errors += 1
@@ -409,9 +412,17 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
                         log.warning("SNMP WALK %s – %s", oid, errorStatus.prettyPrint())
                         snmp_errors += 1
                         break
+                    done = False
                     for vb in varBinds:
-                        rows.append((str(vb[0]), vb[1]))
+                        resp_oid = str(vb[0])
+                        if not resp_oid.startswith(base_oid):
+                            done = True
+                            break
+                        rows.append((resp_oid, vb[1]))
                         row_count += 1
+                        current_obj = ObjectType(ObjectIdentity(resp_oid))
+                    if done:
+                        break
             except Exception as e:
                 log.warning("SNMP WALK %s: %s", oid, e)
                 snmp_errors += 1
