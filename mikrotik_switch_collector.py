@@ -357,10 +357,9 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
         get_cmd, next_cmd,
     )
     engine = SnmpEngine()
-    # Keine timeout/retries-Argumente – pysnmp 7.1.x-Bug: AbstractTransportTarget.__init__()
-    # übergibt timeout intern doppelt (positional + keyword) → "multiple values"-Fehler.
-    # Defaults: timeout=1s, retries=5 – ausreichend für lokales Netz.
-    transport = UdpTransportTarget((host, port))
+    # pysnmp 7.1.x: Konstruktor verboten, .create() ist Pflicht.
+    # Keine timeout/retries-Args: interner Bug übergibt sie doppelt → "multiple values".
+    transport = await UdpTransportTarget.create((host, port))
     auth = CommunityData(community, mpModel=mp_model)
     ctx  = ContextData()
 
