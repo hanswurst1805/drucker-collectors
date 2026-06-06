@@ -305,15 +305,13 @@ def _mp_model(version: str) -> int:
     return 1 if version == "2c" else 0   # 0=SNMPv1, 1=SNMPv2c
 
 
-def _snmp_check():
-    """Prüft ob pysnmp installiert ist und gibt die API-Variante zurück: 'v7' oder 'v4'."""
-    # pysnmp 7.x – async API (snake_case: get_cmd, next_cmd)
+def _snmp_check() -> str:
+    """Gibt die pysnmp-API-Variante zurück ('v7' oder 'v4') oder wirft RuntimeError."""
     try:
         from pysnmp.hlapi.v3arch.asyncio import get_cmd  # noqa: F401
         return "v7"
     except ImportError:
         pass
-    # pysnmp 4.x/5.x/6.x – synchrone hlapi (camelCase: getCmd, nextCmd)
     try:
         from pysnmp.hlapi import getCmd  # noqa: F401
         return "v4"
@@ -321,139 +319,162 @@ def _snmp_check():
         pass
     raise RuntimeError(
         "pysnmp ist nicht installiert.\n"
-        "Bitte installieren:  pip install pysnmp\n"
-        "(Windows/Linux/macOS – kein externes Tool nötig)"
+        "Bitte installieren:  pip install pysnmp"
     )
 
 
-# ── pysnmp 7.x (async) ────────────────────────────────────────────────────────
+def _asyncio_run(coro):
+    """asyncio.run() mit SelectorEventLoop auf Windows (ProactorEventLoop hat kein UDP)."""
+    import asyncio
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    return asyncio.run(coro)
 
-async def _snmp_get_async(host: str, community: str, oid: str, port: int, mp_model: int) -> str:
+
+# ── pysnmp 7.x (async) ───────────────────────────────────────────────────────
+# Alle Abfragen für einen Host in EINER async-Funktion bündeln,
+# damit nur ein Event-Loop und ein SnmpEngine-Objekt genutzt wird.
+
+async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
+                            gets: list[str], walks: list[str]) -> tuple[dict, dict]:
+    """Führt mehrere GET- und WALK-Abfragen in einer Session aus.
+
+    Returns:
+        get_results:  {oid: str}
+        walk_results: {oid_prefix: list[tuple[str, Any]]}
+    """
     from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
         SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, get_cmd,
+        ContextData, ObjectType, ObjectIdentity,
+        get_cmd, next_cmd,
     )
-    engine = SnmpEngine()
-    try:
-        transport = UdpTransportTarget((host, port), timeout=5, retries=1)
-        errorInd, errorStatus, _, varBinds = await get_cmd(
-            engine,
-            CommunityData(community, mpModel=mp_model),
-            transport,
-            ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-        )
-        if errorInd or errorStatus:
-            return ""
-        for vb in varBinds:
-            return str(vb[1]).strip().strip('"')
-    except Exception:
-        pass
-    finally:
-        engine.closeDispatcher()
-    return ""
+    engine    = SnmpEngine()
+    transport = UdpTransportTarget((host, port), timeout=5, retries=1)
+    auth      = CommunityData(community, mpModel=mp_model)
+    ctx       = ContextData()
 
+    get_results:  dict[str, str]          = {}
+    walk_results: dict[str, list]         = {}
 
-async def _snmp_walk_async(host: str, community: str, oid: str, port: int, mp_model: int) -> list:
-    from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
-        SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, next_cmd,
-    )
-    results = []
-    engine = SnmpEngine()
     try:
-        transport = UdpTransportTarget((host, port), timeout=5, retries=1)
-        async for errorInd, errorStatus, _, varBinds in next_cmd(
-            engine,
-            CommunityData(community, mpModel=mp_model),
-            transport,
-            ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-            lexicographic_mode=False,
-        ):
-            if errorInd or errorStatus:
-                break
-            for vb in varBinds:
-                results.append((str(vb[0]), vb[1]))
-    except Exception:
-        pass
+        # ── GETs ──────────────────────────────────────────────────────────────
+        for oid in gets:
+            try:
+                errorInd, errorStatus, _, varBinds = await get_cmd(
+                    engine, auth, transport, ctx,
+                    ObjectType(ObjectIdentity(oid)),
+                )
+                if errorInd:
+                    log.debug("SNMP GET %s – %s", oid, errorInd)
+                    continue
+                if errorStatus:
+                    log.debug("SNMP GET %s – %s", oid, errorStatus.prettyPrint())
+                    continue
+                for vb in varBinds:
+                    get_results[oid] = str(vb[1]).strip().strip('"')
+            except Exception as e:
+                log.debug("SNMP GET %s exception: %s", oid, e)
+
+        # ── WALKs ─────────────────────────────────────────────────────────────
+        for oid in walks:
+            rows: list[tuple[str, object]] = []
+            try:
+                async for errorInd, errorStatus, _, varBinds in next_cmd(
+                    engine, auth, transport, ctx,
+                    ObjectType(ObjectIdentity(oid)),
+                    lexicographic_mode=False,
+                ):
+                    if errorInd:
+                        log.debug("SNMP WALK %s – %s", oid, errorInd)
+                        break
+                    if errorStatus:
+                        log.debug("SNMP WALK %s – %s", oid, errorStatus.prettyPrint())
+                        break
+                    for vb in varBinds:
+                        rows.append((str(vb[0]), vb[1]))
+            except Exception as e:
+                log.debug("SNMP WALK %s exception: %s", oid, e)
+            walk_results[oid] = rows
+
     finally:
-        engine.closeDispatcher()
-    return results
+        engine.close_dispatcher()
+
+    return get_results, walk_results
 
 
 # ── pysnmp 4.x/5.x (sync) ────────────────────────────────────────────────────
 
-def _snmp_get_v4(host: str, community: str, oid: str, port: int, mp_model: int) -> str:
+def _snmp_collect_v4(host: str, community: str, port: int, mp_model: int,
+                     gets: list[str], walks: list[str]) -> tuple[dict, dict]:
     from pysnmp.hlapi import (                          # type: ignore[import]
         SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, getCmd,
+        ContextData, ObjectType, ObjectIdentity,
+        getCmd, nextCmd,
     )
-    try:
-        errorInd, errorStatus, _, varBinds = next(getCmd(
-            SnmpEngine(),
-            CommunityData(community, mpModel=mp_model),
-            UdpTransportTarget((host, port), timeout=5, retries=1),
-            ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-        ))
-        if errorInd or errorStatus:
-            return ""
-        for vb in varBinds:
-            return str(vb[1]).strip().strip('"')
-    except Exception:
-        pass
-    return ""
+    get_results:  dict[str, str]  = {}
+    walk_results: dict[str, list] = {}
 
+    def _engine():
+        return SnmpEngine()
 
-def _snmp_walk_v4(host: str, community: str, oid: str, port: int, mp_model: int) -> list:
-    from pysnmp.hlapi import (                          # type: ignore[import]
-        SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, nextCmd,
-    )
-    results = []
-    try:
-        for errorInd, errorStatus, _, varBinds in nextCmd(
-            SnmpEngine(),
-            CommunityData(community, mpModel=mp_model),
-            UdpTransportTarget((host, port), timeout=5, retries=1),
-            ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-            lexicographicMode=False,
-        ):
-            if errorInd or errorStatus:
-                break
-            for vb in varBinds:
-                results.append((str(vb[0]), vb[1]))
-    except Exception:
-        pass
-    return results
+    transport_args = dict(timeout=5, retries=1)
+    auth = CommunityData(community, mpModel=mp_model)
+
+    for oid in gets:
+        try:
+            errorInd, errorStatus, _, varBinds = next(getCmd(
+                _engine(), auth,
+                UdpTransportTarget((host, port), **transport_args),
+                ContextData(), ObjectType(ObjectIdentity(oid)),
+            ))
+            if not errorInd and not errorStatus:
+                for vb in varBinds:
+                    get_results[oid] = str(vb[1]).strip().strip('"')
+        except Exception as e:
+            log.debug("SNMP GET %s exception: %s", oid, e)
+
+    for oid in walks:
+        rows: list = []
+        try:
+            for errorInd, errorStatus, _, varBinds in nextCmd(
+                _engine(), auth,
+                UdpTransportTarget((host, port), **transport_args),
+                ContextData(), ObjectType(ObjectIdentity(oid)),
+                lexicographicMode=False,
+            ):
+                if errorInd or errorStatus:
+                    break
+                for vb in varBinds:
+                    rows.append((str(vb[0]), vb[1]))
+        except Exception as e:
+            log.debug("SNMP WALK %s exception: %s", oid, e)
+        walk_results[oid] = rows
+
+    return get_results, walk_results
 
 
 # ── Einheitliche Schnittstelle ────────────────────────────────────────────────
 
-def _snmp_get(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> str:
+def _snmp_query(host: str, community: str, port: int, version: str,
+                gets: list[str], walks: list[str]) -> tuple[dict, dict]:
+    """Führt alle GET- und WALK-Abfragen für einen Host aus."""
     api   = _snmp_check()
     model = _mp_model(version)
     if api == "v7":
-        import asyncio
-        return asyncio.run(_snmp_get_async(host, community, oid, port, model))
-    return _snmp_get_v4(host, community, oid, port, model)
-
-
-def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> list:
-    """Gibt list[tuple[str, Any]] zurück – OID-String + rohes pysnmp-Wert-Objekt."""
-    api   = _snmp_check()
-    model = _mp_model(version)
-    if api == "v7":
-        import asyncio
-        return asyncio.run(_snmp_walk_async(host, community, oid, port, model))
-    return _snmp_walk_v4(host, community, oid, port, model)
+        return _asyncio_run(_snmp_collect_v7(host, community, port, model, gets, walks))
+    return _snmp_collect_v4(host, community, port, model, gets, walks)
 
 
 def _snmp_walk_str(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> dict[str, str]:
-    """Wie _snmp_walk, aber Werte sofort als str – für Integer/String-OIDs."""
-    return {k: str(v) for k, v in _snmp_walk(host, community, oid, port, version)}
+    """Einzelner WALK als {oid_str: str} – Hilfsfunktion für collect_snmp."""
+    _, walk_results = _snmp_query(host, community, port, version, gets=[], walks=[oid])
+    return {k: str(v) for k, v in walk_results.get(oid, [])}
+
+
+def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> list:
+    """Einzelner WALK als list[(oid_str, raw_val)] – für MAC-OIDs."""
+    _, walk_results = _snmp_query(host, community, port, version, gets=[], walks=[oid])
+    return walk_results.get(oid, [])
 
 
 def _mac_from_snmp(val) -> str | None:
@@ -485,30 +506,48 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
 
     log.info("Verbinde per SNMP (%s, community=%s)...", host, community)
 
-    kwargs = dict(host=host, community=community, port=port, version=version)
+    # ── Alle Abfragen in einem einzigen Aufruf ────────────────────────────────
+    GET_OIDS = [OID_SYS_NAME, OID_SYS_DESCR, OID_SYS_UPTIME]
+    WALK_OIDS = [
+        OID_IF_DESCR, OID_IF_TYPE, OID_IF_SPEED, OID_IF_PHYSADDR,
+        OID_IF_ADMSTATUS, OID_IF_OPRSTATUS,
+        OID_IP_ADDR, OID_ARP_IP, OID_ARP_MAC,
+        OID_FDB_MAC, OID_FDB_PORT, OID_FDB_STATUS,
+        OID_BRIDGE_PORT, OID_VLAN_NAME,
+    ]
+    get_r, walk_r = _snmp_query(host, community, port, version, GET_OIDS, WALK_OIDS)
+
+    def ws(oid: str) -> dict[str, str]:
+        """Walk-Ergebnis als {oid_str: str}."""
+        return {k: str(v) for k, v in walk_r.get(oid, [])}
+
+    def wr(oid: str) -> dict[str, object]:
+        """Walk-Ergebnis als {oid_str: raw} – für MAC-OIDs."""
+        return dict(walk_r.get(oid, []))
 
     # ── System ────────────────────────────────────────────────────────────────
-    sys_name   = _snmp_get(oid=OID_SYS_NAME,   **kwargs)
-    sys_descr  = _snmp_get(oid=OID_SYS_DESCR,  **kwargs)
-    sys_uptime = _snmp_get(oid=OID_SYS_UPTIME, **kwargs)
+    sys_name   = get_r.get(OID_SYS_NAME,  "")
+    sys_descr  = get_r.get(OID_SYS_DESCR, "")
+    sys_uptime = get_r.get(OID_SYS_UPTIME,"")
 
     # RouterOS-Version aus sysDescr extrahieren
     os_version = ""
     if "RouterOS" in sys_descr:
-        for i, part in enumerate(sys_descr.split()):
-            if part == "RouterOS" and i + 1 < len(sys_descr.split()):
-                os_version = sys_descr.split()[i + 1]
+        parts = sys_descr.split()
+        for i, part in enumerate(parts):
+            if part == "RouterOS" and i + 1 < len(parts):
+                os_version = parts[i + 1]
                 break
 
     log.info("System: %s | %s | uptime: %s", sys_name or host, sys_descr[:60], sys_uptime)
 
     # ── Interfaces ────────────────────────────────────────────────────────────
-    if_descr  = _snmp_walk_str(oid=OID_IF_DESCR,     **kwargs)
-    if_type   = _snmp_walk_str(oid=OID_IF_TYPE,      **kwargs)
-    if_speed  = _snmp_walk_str(oid=OID_IF_SPEED,     **kwargs)
-    if_mac    = dict(_snmp_walk(oid=OID_IF_PHYSADDR,  **kwargs))  # raw für _mac_from_snmp
-    if_admin  = _snmp_walk_str(oid=OID_IF_ADMSTATUS, **kwargs)
-    if_oper   = _snmp_walk_str(oid=OID_IF_OPRSTATUS, **kwargs)
+    if_descr  = ws(OID_IF_DESCR)
+    if_type   = ws(OID_IF_TYPE)
+    if_speed  = ws(OID_IF_SPEED)
+    if_mac    = wr(OID_IF_PHYSADDR)   # raw für _mac_from_snmp
+    if_admin  = ws(OID_IF_ADMSTATUS)
+    if_oper   = ws(OID_IF_OPRSTATUS)
 
     # ifIndex → Interface-Name + Details
     iface_by_idx: dict[str, dict] = {}
@@ -554,15 +593,14 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
 
     # ── IP-Adressen ───────────────────────────────────────────────────────────
     primary_ip: str | None = None
-    ip_entries = _snmp_walk_str(oid=OID_IP_ADDR, **kwargs)
-    for oid_key, ip in ip_entries.items():
+    for oid_key, ip in ws(OID_IP_ADDR).items():
         if ip and not ip.startswith("127."):
             primary_ip = ip
             break
 
     # ── ARP ───────────────────────────────────────────────────────────────────
-    arp_ips  = _snmp_walk_str(oid=OID_ARP_IP,  **kwargs)
-    arp_macs = dict(_snmp_walk(oid=OID_ARP_MAC, **kwargs))   # raw für _mac_from_snmp
+    arp_ips  = ws(OID_ARP_IP)
+    arp_macs = wr(OID_ARP_MAC)   # raw für _mac_from_snmp
     arp_by_mac: dict[str, str] = {}
     for oid_key, ip in arp_ips.items():
         suffix  = oid_key.replace(OID_ARP_IP + ".", "")
@@ -572,14 +610,14 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
             arp_by_mac[mac] = ip
 
     # ── FDB (dot1dTpFdb) ─────────────────────────────────────────────────────
-    fdb_macs   = dict(_snmp_walk(oid=OID_FDB_MAC,    **kwargs))   # raw (MAC)
-    fdb_ports  = _snmp_walk_str(oid=OID_FDB_PORT,    **kwargs)
-    fdb_status = _snmp_walk_str(oid=OID_FDB_STATUS,  **kwargs)
+    fdb_macs   = wr(OID_FDB_MAC)    # raw (MAC)
+    fdb_ports  = ws(OID_FDB_PORT)
+    fdb_status = ws(OID_FDB_STATUS)
 
     # Bridge-Port-Nummer → ifIndex
     bp_to_ifidx = {
         oid_key.split(".")[-1]: str(v)
-        for oid_key, v in _snmp_walk(oid=OID_BRIDGE_PORT, **kwargs)
+        for oid_key, v in walk_r.get(OID_BRIDGE_PORT, [])
     }
 
     neighbors: list[dict] = []
@@ -611,7 +649,7 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
         })
 
     # ── VLANs (Q-BRIDGE) ─────────────────────────────────────────────────────
-    vlan_names = _snmp_walk_str(oid=OID_VLAN_NAME, **kwargs)
+    vlan_names = ws(OID_VLAN_NAME)
     vlan_ids   = sorted({
         int(oid_key.split(".")[-1])
         for oid_key in vlan_names
