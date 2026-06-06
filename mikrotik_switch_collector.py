@@ -324,18 +324,18 @@ def _snmp_check() -> str:
 
 
 def _asyncio_run(coro):
-    """asyncio.run() mit SelectorEventLoop auf Windows (ProactorEventLoop hat kein UDP)."""
+    """Führt eine Coroutine synchron aus.
+    Auf Windows: explizit SelectorEventLoop, da ProactorEventLoop (Default)
+    kein UDP unterstützt. Wir umgehen loop_factory und WindowsSelectorEventLoopPolicy
+    vollständig und erstellen den Loop manuell.
+    """
     import asyncio
     if sys.platform == "win32":
-        # loop_factory (Python 3.12+) ist der neue, nicht-deprecated Weg
+        loop = asyncio.SelectorEventLoop()
         try:
-            return asyncio.run(coro, loop_factory=asyncio.SelectorEventLoop)
-        except TypeError:
-            # Python < 3.12 Fallback
-            policy = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
-            if policy:
-                asyncio.set_event_loop_policy(policy())
-            return asyncio.run(coro)
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
     return asyncio.run(coro)
 
 
@@ -357,12 +357,10 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
         get_cmd, next_cmd,
     )
     engine = SnmpEngine()
-    # UdpTransportTarget.create() ist der korrekte Weg in pysnmp 7.x
-    # Fallback auf direkten Konstruktor für ältere 7.x-Versionen
-    try:
-        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
-    except AttributeError:
-        transport = UdpTransportTarget((host, port), 5, 1)  # positional, kein kwarg-Konflikt
+    # Keine timeout/retries-Argumente – pysnmp 7.1.x-Bug: AbstractTransportTarget.__init__()
+    # übergibt timeout intern doppelt (positional + keyword) → "multiple values"-Fehler.
+    # Defaults: timeout=1s, retries=5 – ausreichend für lokales Netz.
+    transport = UdpTransportTarget((host, port))
     auth = CommunityData(community, mpModel=mp_model)
     ctx  = ContextData()
 
