@@ -366,6 +366,7 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
     get_results:  dict[str, str]          = {}
     walk_results: dict[str, list]         = {}
 
+    snmp_errors = 0
     try:
         # ── GETs ──────────────────────────────────────────────────────────────
         for oid in gets:
@@ -375,19 +376,25 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
                     ObjectType(ObjectIdentity(oid)),
                 )
                 if errorInd:
-                    log.debug("SNMP GET %s – %s", oid, errorInd)
+                    log.warning("SNMP GET %s – %s", oid, errorInd)
+                    snmp_errors += 1
                     continue
                 if errorStatus:
-                    log.debug("SNMP GET %s – %s", oid, errorStatus.prettyPrint())
+                    log.warning("SNMP GET %s – %s", oid, errorStatus.prettyPrint())
+                    snmp_errors += 1
                     continue
                 for vb in varBinds:
-                    get_results[oid] = str(vb[1]).strip().strip('"')
+                    val = str(vb[1]).strip().strip('"')
+                    log.debug("SNMP GET %s = %r", oid, val)
+                    get_results[oid] = val
             except Exception as e:
-                log.debug("SNMP GET %s exception: %s", oid, e)
+                log.warning("SNMP GET %s: %s", oid, e)
+                snmp_errors += 1
 
         # ── WALKs ─────────────────────────────────────────────────────────────
         for oid in walks:
             rows: list[tuple[str, object]] = []
+            row_count = 0
             try:
                 async for errorInd, errorStatus, _, varBinds in next_cmd(
                     engine, auth, transport, ctx,
@@ -395,16 +402,26 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
                     lexicographic_mode=False,
                 ):
                     if errorInd:
-                        log.debug("SNMP WALK %s – %s", oid, errorInd)
+                        log.warning("SNMP WALK %s – %s", oid, errorInd)
+                        snmp_errors += 1
                         break
                     if errorStatus:
-                        log.debug("SNMP WALK %s – %s", oid, errorStatus.prettyPrint())
+                        log.warning("SNMP WALK %s – %s", oid, errorStatus.prettyPrint())
+                        snmp_errors += 1
                         break
                     for vb in varBinds:
                         rows.append((str(vb[0]), vb[1]))
+                        row_count += 1
             except Exception as e:
-                log.debug("SNMP WALK %s exception: %s", oid, e)
+                log.warning("SNMP WALK %s: %s", oid, e)
+                snmp_errors += 1
+            log.debug("SNMP WALK %s → %d Zeilen", oid, row_count)
             walk_results[oid] = rows
+
+        if snmp_errors and not get_results and not any(walk_results.values()):
+            log.error("Alle SNMP-Abfragen fehlgeschlagen – Community '%s' korrekt? "
+                      "SNMP auf dem Switch aktiviert?", auth.communityName.prettyPrint()
+                      if hasattr(auth.communityName, 'prettyPrint') else '?')
 
     finally:
         engine.close_dispatcher()
