@@ -193,16 +193,18 @@ class MikroTikREST:
             if vid:
                 vlan_tags.append(f"vlan-{vid}")
 
-        # Offene Ports aus Services
+        # Offene Ports aus Services + Firewall
         services  = self.get("/ip/service")
-        # Firewall-Filter: extern erreichbare Ports (chain=input, action=accept)
         fw_input  = self.get("/ip/firewall/filter")
         # LLDP/CDP-Nachbarn
         lldp      = self.get("/ip/neighbor")
-        # WLAN-Clients (nur bei WLAN-fähigen Geräten)
+        # WLAN-Clients – Registration-Table (RouterOS 6/7 Classic WLAN)
         wlan_clients = self.get("/interface/wireless/registration-table")
+        # WLAN-Clients – CAPsMAN / WiFi (RouterOS 7.x)
+        capsman_clients = self.get("/caps-man/registration-table")
+        wifi_clients    = self.get("/interface/wifi/registration-table")
 
-        # Services → offene Ports
+        # Services → offene Ports (aktiv + erreichbarkeit per Firewall)
         extern_ports = _extern_ports_from_firewall(fw_input)
         open_ports = []
         for svc in services:
@@ -211,8 +213,10 @@ class MikroTikREST:
             port_val = svc.get("port")
             if not port_val:
                 continue
-            port_num = int(port_val)
-            # Ist der Port in Firewall-Accept-Regeln für extern?
+            try:
+                port_num = int(port_val)
+            except ValueError:
+                continue
             reachable = ["extern"] if port_num in extern_ports else ["intern"]
             open_ports.append({
                 "port": port_num,
@@ -220,6 +224,17 @@ class MikroTikREST:
                 "service": svc.get("name"),
                 "reachable_from": reachable,
             })
+
+        # UDP-Dienste ergänzen (DNS, NTP, SNMP)
+        udp_services = self.get("/ip/dns")
+        if udp_services and udp_services[0].get("allow-remote-requests") == "true":
+            open_ports.append({"port": 53, "proto": "udp", "service": "dns", "reachable_from": ["intern"]})
+        for udp_port, svc_name in [(123, "ntp"), (161, "snmp"), (1701, "l2tp"), (500, "ike"), (4500, "ipsec-nat")]:
+            if udp_port in extern_ports:
+                open_ports.append({"port": udp_port, "proto": "udp", "service": svc_name, "reachable_from": ["extern"]})
+
+        log.info("Ports erkannt: %d (davon extern: %d)", len(open_ports),
+                 sum(1 for p in open_ports if "extern" in p.get("reachable_from", [])))
 
         # System-Health als Metadaten
         uptime   = res.get("uptime", "")
@@ -232,11 +247,17 @@ class MikroTikREST:
             uptime, cpu_load, mem_free, mem_total
         )
 
-        # Nachbarn: ARP + DHCP + Bridge MAC + LLDP + WLAN-Clients
+        # Nachbarn: ARP + DHCP + Bridge MAC + LLDP + WLAN-Clients (alle Quellen)
         neighbors = _parse_neighbors(arp, dhcp)
         neighbors = _enrich_with_bridge_hosts(neighbors, bridge_hosts, bridge_ports)
         neighbors = _enrich_with_lldp(neighbors, lldp)
-        neighbors = _enrich_with_wlan(neighbors, wlan_clients)
+        # Classic WLAN + CAPsMAN + WiFi (RouterOS 7) zusammenführen
+        all_wlan = wlan_clients + capsman_clients + wifi_clients
+        neighbors = _enrich_with_wlan(neighbors, all_wlan)
+
+        wlan_count = sum(1 for n in neighbors if n.get("_source") == "wlan")
+        arp_count  = sum(1 for n in neighbors if n.get("_source") != "wlan")
+        log.info("Nachbarn: %d gesamt (%d ARP/DHCP, %d WLAN)", len(neighbors), arp_count, wlan_count)
 
         return {
             "device": {
@@ -563,6 +584,60 @@ def api_post(url: str, api_key: str, data, timeout: int = 30):
         return json.loads(resp.read())
 
 
+def _build_neighbor_device(n: dict, config: dict, mikrotik_ip: str | None) -> dict | None:
+    """Wandelt einen Nachbar-Eintrag in ein NetAsset Discovery-Device um."""
+    ip  = n.get("ip")
+    mac = n.get("mac")
+
+    # Weder IP noch MAC → nicht push-bar
+    if not ip and not mac:
+        return None
+    # MikroTik selbst überspringen
+    if ip and ip == mikrotik_ip:
+        return None
+
+    source_type = n.get("_source", "arp")   # arp | wlan | lldp | bridge
+
+    # Tags je nach Herkunft
+    tags = ["via-mikrotik"]
+    if source_type == "wlan":
+        tags += ["wlan-client", "wireless"]
+        asset_type = "client"
+    elif source_type == "lldp":
+        tags += ["lldp-discovered"]
+        asset_type = "switch"   # LLDP-Nachbarn sind meist Netzwerkgeräte
+    else:
+        tags += ["arp-discovered"]
+        asset_type = "server"
+
+    # Zusatzinfos als Notes
+    notes_parts = []
+    if n.get("_wlan_signal"):
+        notes_parts.append(f"WLAN-Signal: {n['_wlan_signal']}")
+    if n.get("_wlan_tx_rate"):
+        notes_parts.append(f"TX-Rate: {n['_wlan_tx_rate']}")
+    if n.get("_switch_port"):
+        notes_parts.append(f"Switch-Port: {n['_switch_port']}")
+    if n.get("_lldp_iface"):
+        notes_parts.append(f"LLDP-Interface: {n['_lldp_iface']}")
+    if n.get("comment"):
+        notes_parts.append(n["comment"])
+
+    device: dict = {
+        "hostname":       n.get("hostname"),
+        "ip_address":     ip,
+        "mac_address":    mac,
+        "asset_type":     asset_type,
+        "exposure_level": config["exposure_level"],
+        "tags":           tags,
+        "source":         f"mikrotik-{source_type}",
+    }
+    if notes_parts:
+        device["notes"] = "\n".join(notes_parts)
+
+    return device
+
+
 def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = False):
     base = config["api_url"].rstrip("/")
     device = data["device"]
@@ -579,52 +654,73 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
     device["tags"]           = config["tags"] + vlan_tags + [asset_type]
     device["source"]         = "mikrotik-collector"
 
+    # Nachbar-Devices aufbauen
+    mikrotik_ip = device.get("ip_address")
+    neighbor_devices = []
+    for n in neighbors:
+        nd = _build_neighbor_device(n, config, mikrotik_ip)
+        if nd:
+            neighbor_devices.append(nd)
+
+    # Statistik nach Typ
+    by_src: dict[str, int] = {}
+    for nd in neighbor_devices:
+        src = nd.get("source", "?")
+        by_src[src] = by_src.get(src, 0) + 1
+
     if dry_run:
         print("\n=== DRY RUN ===\n")
         print("MikroTik-Asset:")
         print(json.dumps(device, indent=2))
-        print(f"\nNachbarn ({len(neighbors)}):")
-        for n in neighbors[:10]:
-            print(f"  {n['ip']:<18} {n.get('mac') or '—':<20} {n.get('hostname') or '—'}")
-        if len(neighbors) > 10:
-            print(f"  ... +{len(neighbors)-10} weitere")
+        print(f"\nNachbarn gesamt: {len(neighbor_devices)}")
+        for src, cnt in sorted(by_src.items()):
+            print(f"  {src}: {cnt}")
+        print()
+        # Aufgeschlüsselt nach Quelle anzeigen
+        for src_filter in ("mikrotik-wlan", "mikrotik-arp", "mikrotik-lldp", "mikrotik-bridge"):
+            group = [nd for nd in neighbor_devices if nd.get("source") == src_filter]
+            if not group:
+                continue
+            label = src_filter.replace("mikrotik-", "").upper()
+            print(f"── {label} ({len(group)}) ──")
+            for nd in group[:15]:
+                ip_s  = (nd.get("ip_address") or "—").ljust(18)
+                mac_s = (nd.get("mac_address") or "—").ljust(20)
+                host  = nd.get("hostname") or "—"
+                notes = nd.get("notes", "")
+                print(f"  {ip_s} {mac_s} {host}  {notes}")
+            if len(group) > 15:
+                print(f"  ... +{len(group)-15} weitere")
+            print()
         return
 
-    # MikroTik selbst
+    # MikroTik selbst pushen
     result = api_post(f"{base}/api/v1/discovery/ingest", config["api_key"], [device], config["timeout"])
     action = result[0].get("action") if result else "?"
     log.info("MikroTik-Asset: %s (%s)", device.get("hostname"), action)
 
-    if not push_neighbors or not neighbors:
+    if not push_neighbors or not neighbor_devices:
         return
 
-    # Nachbarn als Discovery-Devices
-    neighbor_devices = []
-    for n in neighbors:
-        if not n.get("ip") or n["ip"] == device.get("ip_address"):
-            continue
-        neighbor_devices.append({
-            "hostname": n.get("hostname"),
-            "ip_address": n["ip"],
-            "mac_address": n.get("mac"),
-            "asset_type": "server",
-            "exposure_level": config["exposure_level"],
-            "tags": ["arp-discovered", "via-mikrotik"],
-            "source": "mikrotik-arp",
-        })
+    # Nachbarn in Batches von 50 pushen
+    created = merged = flagged = 0
+    for i in range(0, len(neighbor_devices), 50):
+        batch = neighbor_devices[i:i+50]
+        res = api_post(f"{base}/api/v1/discovery/ingest", config["api_key"], batch, config["timeout"])
+        for item in (res or []):
+            a = item.get("action", "")
+            if a == "created":  created += 1
+            elif a == "merged": merged  += 1
+            else:               flagged += 1
 
-    if neighbor_devices:
-        # In Batches von 50
-        created = merged = flagged = 0
-        for i in range(0, len(neighbor_devices), 50):
-            batch = neighbor_devices[i:i+50]
-            res = api_post(f"{base}/api/v1/discovery/ingest", config["api_key"], batch, config["timeout"])
-            for item in (res or []):
-                a = item.get("action", "")
-                if a == "created": created += 1
-                elif a == "merged": merged += 1
-                else: flagged += 1
-        log.info("Nachbarn: %d neu, %d aktualisiert, %d Konflikt", created, merged, flagged)
+    log.info(
+        "Nachbarn: %d neu, %d aktualisiert, %d Konflikt  (ARP:%d WLAN:%d LLDP:%d Bridge:%d)",
+        created, merged, flagged,
+        by_src.get("mikrotik-arp", 0),
+        by_src.get("mikrotik-wlan", 0),
+        by_src.get("mikrotik-lldp", 0),
+        by_src.get("mikrotik-bridge", 0),
+    )
 
 
 # ---------------------------------------------------------------------------
