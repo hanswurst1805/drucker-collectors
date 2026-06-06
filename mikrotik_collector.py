@@ -280,28 +280,37 @@ class MikroTikREST:
 
         # Services → offene Ports (aktiv + erreichbarkeit per Firewall)
         extern_ports = _extern_ports_from_firewall(fw_input)
+        log.debug("Services von API (%d Einträge): %s", len(services), services)
+
         open_ports = []
         for svc in services:
-            if svc.get("disabled") == "true" or svc.get("disabled") is True:
+            # RouterOS liefert disabled als String "true"/"false" oder bool
+            disabled = svc.get("disabled", "false")
+            if disabled == "true" or disabled is True:
                 continue
             port_val = svc.get("port")
             if not port_val:
                 continue
             try:
                 port_num = int(port_val)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
             reachable = ["extern"] if port_num in extern_ports else ["intern"]
             open_ports.append({
                 "port": port_num,
                 "proto": "tcp",
-                "service": svc.get("name"),
+                "service": svc.get("name", ""),
                 "reachable_from": reachable,
             })
 
-        # UDP-Dienste ergänzen (DNS, NTP, SNMP)
+        # Fallback: Socket-Check bekannter MikroTik-Ports wenn API nichts liefert
+        if not open_ports:
+            log.warning("Keine Ports via REST API – führe Socket-Fallback durch...")
+            open_ports = _probe_mikrotik_ports(self._host)
+
+        # UDP-Dienste ergänzen
         udp_services = self.get("/ip/dns")
-        if udp_services and udp_services[0].get("allow-remote-requests") == "true":
+        if udp_services and udp_services[0].get("allow-remote-requests") in ("true", True):
             open_ports.append({"port": 53, "proto": "udp", "service": "dns", "reachable_from": ["intern"]})
         for udp_port, svc_name in [(123, "ntp"), (161, "snmp"), (1701, "l2tp"), (500, "ike"), (4500, "ipsec-nat")]:
             if udp_port in extern_ports:
@@ -359,6 +368,40 @@ class MikroTikREST:
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen
 # ---------------------------------------------------------------------------
+
+def _probe_mikrotik_ports(host: str, timeout: float = 2.0) -> list[dict]:
+    """
+    Socket-basierter Fallback: prüft bekannte MikroTik-Ports direkt.
+    Wird verwendet wenn /ip/service keine Daten liefert.
+    """
+    import socket
+    MIKROTIK_PORTS = [
+        (21,   "tcp", "ftp"),
+        (22,   "tcp", "ssh"),
+        (23,   "tcp", "telnet"),
+        (80,   "tcp", "www"),
+        (443,  "tcp", "www-ssl"),
+        (8291, "tcp", "winbox"),
+        (8728, "tcp", "api"),
+        (8729, "tcp", "api-ssl"),
+        (8080, "tcp", "www-alt"),
+    ]
+    found = []
+    for port, proto, name in MIKROTIK_PORTS:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                found.append({
+                    "port": port,
+                    "proto": proto,
+                    "service": name,
+                    "reachable_from": ["intern"],
+                })
+                log.debug("Port offen: %d/%s (%s)", port, proto, name)
+        except (ConnectionRefusedError, OSError):
+            pass
+    log.info("Socket-Fallback: %d Ports offen auf %s", len(found), host)
+    return found
+
 
 def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
     """Ermittelt ob das Gerät Router oder Switch ist."""
@@ -746,6 +789,14 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
         print("\n=== DRY RUN ===\n")
         print("MikroTik-Asset:")
         print(json.dumps(device, indent=2))
+        ports = device.get("open_ports") or []
+        if ports:
+            print(f"\nPorts ({len(ports)}):")
+            for p in ports:
+                reach = ",".join(p.get("reachable_from", []))
+                print(f"  {p['port']}/{p['proto']:<4} {p.get('service',''):<12} [{reach}]")
+        else:
+            print("\nPorts: keine erkannt")
         print(f"\nNachbarn gesamt: {len(neighbor_devices)}")
         for src, cnt in sorted(by_src.items()):
             print(f"  {src}: {cnt}")
