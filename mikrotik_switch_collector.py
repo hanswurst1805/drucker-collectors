@@ -327,7 +327,15 @@ def _asyncio_run(coro):
     """asyncio.run() mit SelectorEventLoop auf Windows (ProactorEventLoop hat kein UDP)."""
     import asyncio
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        # loop_factory (Python 3.12+) ist der neue, nicht-deprecated Weg
+        try:
+            return asyncio.run(coro, loop_factory=asyncio.SelectorEventLoop)
+        except TypeError:
+            # Python < 3.12 Fallback
+            policy = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+            if policy:
+                asyncio.set_event_loop_policy(policy())
+            return asyncio.run(coro)
     return asyncio.run(coro)
 
 
@@ -348,10 +356,15 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
         ContextData, ObjectType, ObjectIdentity,
         get_cmd, next_cmd,
     )
-    engine    = SnmpEngine()
-    transport = UdpTransportTarget((host, port), timeout=5, retries=1)
-    auth      = CommunityData(community, mpModel=mp_model)
-    ctx       = ContextData()
+    engine = SnmpEngine()
+    # UdpTransportTarget.create() ist der korrekte Weg in pysnmp 7.x
+    # Fallback auf direkten Konstruktor für ältere 7.x-Versionen
+    try:
+        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
+    except AttributeError:
+        transport = UdpTransportTarget((host, port), 5, 1)  # positional, kein kwarg-Konflikt
+    auth = CommunityData(community, mpModel=mp_model)
+    ctx  = ContextData()
 
     get_results:  dict[str, str]          = {}
     walk_results: dict[str, list]         = {}
