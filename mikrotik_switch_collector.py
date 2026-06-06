@@ -307,16 +307,14 @@ def _mp_model(version: str) -> int:
 
 def _snmp_check():
     """Prüft ob pysnmp installiert ist und gibt die API-Variante zurück: 'v7' oder 'v4'."""
-    # pysnmp 7.x – async API unter pysnmp.hlapi.v3arch.asyncio
+    # pysnmp 7.x – async API (snake_case: get_cmd, next_cmd)
     try:
-        import pysnmp.hlapi.v3arch.asyncio  # noqa: F401
+        from pysnmp.hlapi.v3arch.asyncio import get_cmd  # noqa: F401
         return "v7"
     except ImportError:
         pass
-    # pysnmp 4.x/5.x/6.x – synchrone hlapi
+    # pysnmp 4.x/5.x/6.x – synchrone hlapi (camelCase: getCmd, nextCmd)
     try:
-        import pysnmp.hlapi  # noqa: F401
-        # Prüfen ob getCmd synchron nutzbar (4.x hat es als Generator)
         from pysnmp.hlapi import getCmd  # noqa: F401
         return "v4"
     except ImportError:
@@ -333,12 +331,12 @@ def _snmp_check():
 async def _snmp_get_async(host: str, community: str, oid: str, port: int, mp_model: int) -> str:
     from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
         SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, getCmd,
+        ContextData, ObjectType, ObjectIdentity, get_cmd,
     )
     engine = SnmpEngine()
     try:
-        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
-        errorInd, errorStatus, _, varBinds = await getCmd(
+        transport = UdpTransportTarget((host, port), timeout=5, retries=1)
+        errorInd, errorStatus, _, varBinds = await get_cmd(
             engine,
             CommunityData(community, mpModel=mp_model),
             transport,
@@ -359,19 +357,19 @@ async def _snmp_get_async(host: str, community: str, oid: str, port: int, mp_mod
 async def _snmp_walk_async(host: str, community: str, oid: str, port: int, mp_model: int) -> list:
     from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
         SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity, nextCmd,
+        ContextData, ObjectType, ObjectIdentity, next_cmd,
     )
     results = []
     engine = SnmpEngine()
     try:
-        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
-        async for errorInd, errorStatus, _, varBinds in nextCmd(
+        transport = UdpTransportTarget((host, port), timeout=5, retries=1)
+        async for errorInd, errorStatus, _, varBinds in next_cmd(
             engine,
             CommunityData(community, mpModel=mp_model),
             transport,
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
-            lexicographicMode=False,
+            lexicographic_mode=False,
         ):
             if errorInd or errorStatus:
                 break
