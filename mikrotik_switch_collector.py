@@ -56,17 +56,21 @@ CONF_PATHS = [
 
 def _section_to_config(s: dict, na: dict) -> dict:
     return {
-        "username":       os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
-        "password":       os.environ.get("MIKROTIK_PASS", s.get("password", "")),
-        "use_https":      s.get("use_https", "false").lower() == "true",
-        "verify_ssl":     s.get("verify_ssl", "false").lower() == "true",
-        "port_rest":      int(s.get("port_rest", "80")),
-        "api_url":        os.environ.get("NETASSET_URL",     na.get("api_url",  "https://ocs.kiste.org")),
-        "api_key":        os.environ.get("NETASSET_API_KEY", na.get("api_key",  "")),
-        "exposure_level": na.get("exposure_level", "INTERN"),
-        "tags":           [t.strip() for t in na.get("tags", "mikrotik,switch").split(",")],
-        "timeout":        int(na.get("timeout", "15")),
-        "push_neighbors": na.get("push_neighbors", "true").lower() == "true",
+        "username":        os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
+        "password":        os.environ.get("MIKROTIK_PASS", s.get("password", "")),
+        "use_https":       s.get("use_https", "false").lower() == "true",
+        "verify_ssl":      s.get("verify_ssl", "false").lower() == "true",
+        "port_rest":       int(s.get("port_rest", "80")),
+        "mode":            s.get("mode", "rest"),           # rest | snmp
+        "snmp_community":  s.get("snmp_community", "public"),
+        "snmp_port":       int(s.get("snmp_port", "161")),
+        "snmp_version":    s.get("snmp_version", "2c"),     # 1 | 2c
+        "api_url":         os.environ.get("NETASSET_URL",     na.get("api_url",  "https://ocs.kiste.org")),
+        "api_key":         os.environ.get("NETASSET_API_KEY", na.get("api_key",  "")),
+        "exposure_level":  na.get("exposure_level", "INTERN"),
+        "tags":            [t.strip() for t in na.get("tags", "mikrotik,switch").split(",")],
+        "timeout":         int(na.get("timeout", "15")),
+        "push_neighbors":  na.get("push_neighbors", "true").lower() == "true",
     }
 
 
@@ -266,6 +270,317 @@ class SwitchREST:
             "vlan_ids":   vlan_ids,
             "neighbors":  neighbors,
         }
+
+
+# ---------------------------------------------------------------------------
+# SNMP-Collector
+# ---------------------------------------------------------------------------
+
+# Standard-MIB OIDs
+OID_SYS_NAME     = "1.3.6.1.2.1.1.5.0"
+OID_SYS_DESCR    = "1.3.6.1.2.1.1.1.0"
+OID_SYS_UPTIME   = "1.3.6.1.2.1.1.3.0"
+OID_IF_DESCR     = "1.3.6.1.2.1.2.2.1.2"    # ifDescr
+OID_IF_TYPE      = "1.3.6.1.2.1.2.2.1.3"    # ifType  (6=ethernet)
+OID_IF_SPEED     = "1.3.6.1.2.1.2.2.1.5"    # ifSpeed (bps)
+OID_IF_PHYSADDR  = "1.3.6.1.2.1.2.2.1.6"    # ifPhysAddress (MAC)
+OID_IF_ADMSTATUS = "1.3.6.1.2.1.2.2.1.7"    # 1=up, 2=down
+OID_IF_OPRSTATUS = "1.3.6.1.2.1.2.2.1.8"    # 1=up, 2=down
+OID_IP_ADDRTABLE = "1.3.6.1.2.1.4.20.1"     # ipAddrTable
+OID_IP_ADDR      = "1.3.6.1.2.1.4.20.1.1"   # ipAdEntAddr
+OID_IP_IFINDEX   = "1.3.6.1.2.1.4.20.1.2"   # ipAdEntIfIndex
+OID_ARP_IP       = "1.3.6.1.2.1.4.22.1.3"   # ipNetToMediaNetAddress
+OID_ARP_MAC      = "1.3.6.1.2.1.4.22.1.2"   # ipNetToMediaPhysAddress
+# BRIDGE-MIB (dot1d)
+OID_FDB_MAC      = "1.3.6.1.2.1.17.4.3.1.1" # dot1dTpFdbAddress
+OID_FDB_PORT     = "1.3.6.1.2.1.17.4.3.1.2" # dot1dTpFdbPort
+OID_FDB_STATUS   = "1.3.6.1.2.1.17.4.3.1.3" # 3=learned, 5=self
+OID_BRIDGE_PORT  = "1.3.6.1.2.1.17.1.4.1.2" # dot1dBasePortIfIndex
+# Q-BRIDGE-MIB (VLANs)
+OID_VLAN_NAME    = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName
+OID_VLAN_EGRESS  = "1.3.6.1.2.1.17.7.1.4.3.1.2"  # dot1qVlanStaticEgressPorts
+
+
+def _snmp_import():
+    """Lazy import pysnmp – gibt hilfreiche Fehlermeldung wenn nicht installiert."""
+    try:
+        from pysnmp.hlapi import (                      # type: ignore[import]
+            SnmpEngine, CommunityData, UdpTransportTarget,
+            ContextData, ObjectType, ObjectIdentity,
+            getCmd, nextCmd,
+        )
+        return SnmpEngine, CommunityData, UdpTransportTarget, ContextData, \
+               ObjectType, ObjectIdentity, getCmd, nextCmd
+    except ImportError:
+        raise RuntimeError(
+            "pysnmp ist nicht installiert.\n"
+            "Bitte installieren:  pip install pysnmp\n"
+            "(Windows/Linux/macOS – kein externes Tool nötig)"
+        )
+
+
+def _mp_model(version: str) -> int:
+    return 1 if version == "2c" else 0   # 0=SNMPv1, 1=SNMPv2c
+
+
+def _snmp_get(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> str:
+    (SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
+     ObjectType, ObjectIdentity, getCmd, _) = _snmp_import()
+    try:
+        errorIndication, errorStatus, _, varBinds = next(
+            getCmd(
+                SnmpEngine(),
+                CommunityData(community, mpModel=_mp_model(version)),
+                UdpTransportTarget((host, port), timeout=5, retries=1),
+                ContextData(),
+                ObjectType(ObjectIdentity(oid)),
+            )
+        )
+        if errorIndication or errorStatus:
+            return ""
+        for vb in varBinds:
+            return str(vb[1]).strip().strip('"')
+    except Exception:
+        pass
+    return ""
+
+
+def _snmp_walk_str(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> dict[str, str]:
+    """Wie _snmp_walk, aber Werte sofort als str – für Integer/String-OIDs."""
+    return {k: str(v) for k, v in _snmp_walk(host, community, oid, port, version)}
+
+
+def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: str = "2c"):
+    """Gibt list[tuple[str, Any]] zurück – OID-String + rohes pysnmp-Wert-Objekt."""
+    (SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
+     ObjectType, ObjectIdentity, _, nextCmd) = _snmp_import()
+    results = []
+    try:
+        for errorIndication, errorStatus, _, varBinds in nextCmd(
+            SnmpEngine(),
+            CommunityData(community, mpModel=_mp_model(version)),
+            UdpTransportTarget((host, port), timeout=5, retries=1),
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+            lexicographicMode=False,
+        ):
+            if errorIndication or errorStatus:
+                break
+            for vb in varBinds:
+                results.append((str(vb[0]), vb[1]))
+    except Exception:
+        pass
+    return results
+
+
+def _mac_from_snmp(val) -> str | None:
+    """Normalisiert einen pysnmp-OctetString-Wert oder String auf aa:bb:cc:dd:ee:ff."""
+    # pysnmp OctetString: Zugriff auf Raw-Bytes über asNumbers() oder asOctets()
+    try:
+        nums = val.asNumbers()      # tuple of ints
+        if len(nums) == 6:
+            return ":".join(f"{b:02x}" for b in nums)
+    except AttributeError:
+        pass
+    # Fallback: als String interpretieren
+    raw = str(val)
+    # Format "0x001122334455"
+    if raw.startswith("0x"):
+        raw = raw[2:]
+    # Formatvarianten bereinigen: "-", ":", " "
+    clean = raw.replace(":", "").replace("-", "").replace(" ", "")
+    if len(clean) == 12 and all(c in "0123456789abcdefABCDEF" for c in clean):
+        return ":".join(clean[i:i+2] for i in range(0, 12, 2)).lower()
+    return None
+
+
+def collect_snmp(host: str, community: str = "public", port: int = 161, version: str = "2c") -> dict:
+    """Sammelt Switch-Daten via SNMP (IF-MIB + BRIDGE-MIB + Q-BRIDGE-MIB).
+    Benötigt: pip install pysnmp
+    """
+    _snmp_import()  # früh fehlschlagen wenn nicht installiert
+
+    log.info("Verbinde per SNMP (%s, community=%s)...", host, community)
+
+    kwargs = dict(host=host, community=community, port=port, version=version)
+
+    # ── System ────────────────────────────────────────────────────────────────
+    sys_name   = _snmp_get(oid=OID_SYS_NAME,   **kwargs)
+    sys_descr  = _snmp_get(oid=OID_SYS_DESCR,  **kwargs)
+    sys_uptime = _snmp_get(oid=OID_SYS_UPTIME, **kwargs)
+
+    # RouterOS-Version aus sysDescr extrahieren
+    os_version = ""
+    if "RouterOS" in sys_descr:
+        for i, part in enumerate(sys_descr.split()):
+            if part == "RouterOS" and i + 1 < len(sys_descr.split()):
+                os_version = sys_descr.split()[i + 1]
+                break
+
+    log.info("System: %s | %s | uptime: %s", sys_name or host, sys_descr[:60], sys_uptime)
+
+    # ── Interfaces ────────────────────────────────────────────────────────────
+    if_descr  = _snmp_walk_str(oid=OID_IF_DESCR,     **kwargs)
+    if_type   = _snmp_walk_str(oid=OID_IF_TYPE,      **kwargs)
+    if_speed  = _snmp_walk_str(oid=OID_IF_SPEED,     **kwargs)
+    if_mac    = dict(_snmp_walk(oid=OID_IF_PHYSADDR,  **kwargs))  # raw für _mac_from_snmp
+    if_admin  = _snmp_walk_str(oid=OID_IF_ADMSTATUS, **kwargs)
+    if_oper   = _snmp_walk_str(oid=OID_IF_OPRSTATUS, **kwargs)
+
+    # ifIndex → Interface-Name + Details
+    iface_by_idx: dict[str, dict] = {}
+    port_table: list[dict] = []
+    primary_mac: str | None = None
+
+    for oid_key, descr in if_descr.items():
+        idx = oid_key.split(".")[-1]
+        itype = if_type.get(f"1.3.6.1.2.1.2.2.1.3.{idx}", "")
+
+        # Nur Ethernet-Interfaces (ifType=6) und ggf. Aggregates (161=ieee8023adLag)
+        if itype not in ("6", "161"):
+            continue
+
+        speed_bps = int(if_speed.get(f"1.3.6.1.2.1.2.2.1.5.{idx}", "0") or "0")
+        speed_str = _bps_to_human(speed_bps)
+
+        mac_raw = if_mac.get(f"1.3.6.1.2.1.2.2.1.6.{idx}", "")
+        mac     = _mac_from_snmp(mac_raw)
+
+        admin_up = if_admin.get(f"1.3.6.1.2.1.2.2.1.7.{idx}", "2") == "1"
+        oper_up  = if_oper.get(f"1.3.6.1.2.1.2.2.1.8.{idx}",  "2") == "1"
+
+        iface_by_idx[idx] = {"name": descr, "mac": mac}
+
+        if mac and not primary_mac and descr.lower() in ("bridge", "vlan1", "ether1", "lo0"):
+            primary_mac = mac
+
+        port_table.append({
+            "name":         descr,
+            "running":      oper_up,
+            "disabled":     not admin_up,
+            "mac":          mac,
+            "speed":        speed_str,
+            "full_duplex":  None,   # nicht über Standard-MIB verfügbar
+            "pvid":         "1",    # wird unten aus Q-BRIDGE überschrieben
+            "bridge":       "",
+            "tagged_vlans": [],
+            "comment":      "",
+        })
+
+    port_table.sort(key=lambda p: p["name"])
+
+    # ── IP-Adressen ───────────────────────────────────────────────────────────
+    primary_ip: str | None = None
+    ip_entries = _snmp_walk_str(oid=OID_IP_ADDR, **kwargs)
+    for oid_key, ip in ip_entries.items():
+        if ip and not ip.startswith("127."):
+            primary_ip = ip
+            break
+
+    # ── ARP ───────────────────────────────────────────────────────────────────
+    arp_ips  = _snmp_walk_str(oid=OID_ARP_IP,  **kwargs)
+    arp_macs = dict(_snmp_walk(oid=OID_ARP_MAC, **kwargs))   # raw für _mac_from_snmp
+    arp_by_mac: dict[str, str] = {}
+    for oid_key, ip in arp_ips.items():
+        suffix  = oid_key.replace(OID_ARP_IP + ".", "")
+        mac_raw = arp_macs.get(f"{OID_ARP_MAC}.{suffix}", "")
+        mac     = _mac_from_snmp(mac_raw)
+        if mac and ip and not ip.startswith("127."):
+            arp_by_mac[mac] = ip
+
+    # ── FDB (dot1dTpFdb) ─────────────────────────────────────────────────────
+    fdb_macs   = dict(_snmp_walk(oid=OID_FDB_MAC,    **kwargs))   # raw (MAC)
+    fdb_ports  = _snmp_walk_str(oid=OID_FDB_PORT,    **kwargs)
+    fdb_status = _snmp_walk_str(oid=OID_FDB_STATUS,  **kwargs)
+
+    # Bridge-Port-Nummer → ifIndex
+    bp_to_ifidx = {
+        oid_key.split(".")[-1]: str(v)
+        for oid_key, v in _snmp_walk(oid=OID_BRIDGE_PORT, **kwargs)
+    }
+
+    neighbors: list[dict] = []
+    seen_macs: set[str]   = set()
+
+    for oid_key, mac_raw in fdb_macs.items():
+        suffix = oid_key.replace(OID_FDB_MAC + ".", "")
+        status = fdb_status.get(f"{OID_FDB_STATUS}.{suffix}", "")
+        # 3=learned, 5=self → eigene MACs überspringen
+        if status == "5":
+            continue
+
+        mac = _mac_from_snmp(mac_raw)
+        if not mac or mac in seen_macs:
+            continue
+        seen_macs.add(mac)
+
+        bridge_port = fdb_ports.get(f"{OID_FDB_PORT}.{suffix}", "")
+        if_idx      = bp_to_ifidx.get(bridge_port, "")
+        port_name   = iface_by_idx.get(if_idx, {}).get("name", f"port{bridge_port}")
+        ip          = arp_by_mac.get(mac)
+
+        neighbors.append({
+            "ip":          ip,
+            "mac":         mac,
+            "hostname":    None,
+            "switch_port": port_name,
+            "_source":     "fdb-snmp",
+        })
+
+    # ── VLANs (Q-BRIDGE) ─────────────────────────────────────────────────────
+    vlan_names = _snmp_walk_str(oid=OID_VLAN_NAME, **kwargs)
+    vlan_ids   = sorted({
+        int(oid_key.split(".")[-1])
+        for oid_key in vlan_names
+        if oid_key.split(".")[-1].isdigit() and int(oid_key.split(".")[-1]) < 4094
+    })
+    log.info(
+        "Interfaces: %d Ports | FDB: %d Geräte | VLANs: %s",
+        len(port_table), len(neighbors),
+        ", ".join(str(v) for v in vlan_ids) if vlan_ids else "—",
+    )
+
+    # ── Open Ports: Socket-Check ──────────────────────────────────────────────
+    open_ports = _socket_probe_ports(host)
+
+    return {
+        "device": {
+            "hostname":        sys_name or host,
+            "ip_address":      primary_ip or host,
+            "mac_address":     primary_mac,
+            "manufacturer":    "MikroTik",
+            "model":           None,
+            "os_name":         "RouterOS",
+            "os_version":      os_version or None,
+            "open_ports":      open_ports,
+        },
+        "port_table": port_table,
+        "vlan_ids":   vlan_ids,
+        "neighbors":  neighbors,
+    }
+
+
+def _bps_to_human(bps: int) -> str:
+    if bps >= 1_000_000_000:
+        return f"{bps // 1_000_000_000}Gbps"
+    if bps >= 1_000_000:
+        return f"{bps // 1_000_000}Mbps"
+    if bps > 0:
+        return f"{bps // 1_000}Kbps"
+    return ""
+
+
+def _socket_probe_ports(host: str, timeout: float = 2.0) -> list[dict]:
+    KNOWN = [(22,"ssh"),(80,"www"),(443,"www-ssl"),(8291,"winbox"),(8728,"api"),(8729,"api-ssl")]
+    found = []
+    for port, name in KNOWN:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                found.append({"port": port, "proto": "tcp",
+                              "service": name, "reachable_from": ["intern"]})
+        except OSError:
+            pass
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +920,8 @@ Beispiele:
                         metavar="FILE", help="Config-Datei (mehrfach verwendbar)")
     parser.add_argument("--dry-run",      action="store_true")
     parser.add_argument("--no-neighbors", action="store_true", help="Keine FDB-Geräte pushen")
+    parser.add_argument("--snmp",         action="store_true",
+                        help="SNMP statt REST API verwenden (überschreibt mode= in Config)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -627,19 +944,27 @@ Beispiele:
 
     for host_config in host_configs:
         host = host_config["host"]
-        log.info("━━━ %s (user=%s, port=%s) ━━━",
-                 host, host_config["username"], host_config["port_rest"])
+        mode = "snmp" if args.snmp else host_config.get("mode", "rest")
+        log.info("━━━ %s (mode=%s) ━━━", host, mode)
 
         try:
-            client = SwitchREST(
-                host,
-                host_config["username"],
-                host_config["password"],
-                use_https=host_config["use_https"],
-                port=host_config["port_rest"],
-                verify_ssl=host_config["verify_ssl"],
-            )
-            data = client.collect()
+            if mode == "snmp":
+                data = collect_snmp(
+                    host,
+                    community=host_config.get("snmp_community", "public"),
+                    port=host_config.get("snmp_port", 161),
+                    version=host_config.get("snmp_version", "2c"),
+                )
+            else:
+                client = SwitchREST(
+                    host,
+                    host_config["username"],
+                    host_config["password"],
+                    use_https=host_config["use_https"],
+                    port=host_config["port_rest"],
+                    verify_ssl=host_config["verify_ssl"],
+                )
+                data = client.collect()
         except Exception as e:
             log.error("Fehler bei %s: %s", host, e)
             errors += 1

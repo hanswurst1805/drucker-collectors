@@ -1,24 +1,60 @@
 # ────────────────────────────────────────────────────────────────────────────
 # MikroTik-Switch Collector – Konfiguration
 #
-# Für CRS/CSS-Switches mit RouterOS und REST API (Port 80 HTTP oder 443 HTTPS)
+# Unterstützte Protokolle:
+#   mode=rest  → REST API  (RouterOS 7.1+, HTTP/HTTPS)
+#   mode=snmp  → SNMP v1/v2c (RouterOS 6+, plattformunabhängig)
+#
+# Python-Voraussetzung für SNMP: pip install pysnmp
 #
 # Aufruf:
-#   python3 mikrotik_switch_collector.py -c mikrotik_switch_collector.conf
+#   python3 mikrotik_switch_collector.py -c switches.conf
 #   python3 mikrotik_switch_collector.py -c keller.conf -c eg.conf
+#   python3 mikrotik_switch_collector.py -c switches.conf --snmp     # SNMP erzwingen
+#   python3 mikrotik_switch_collector.py -c switches.conf --dry-run  # nur anzeigen
 # ────────────────────────────────────────────────────────────────────────────
 
+
+# ── MikroTik-SNMP auf dem Switch aktivieren ───────────────────────────────────
+#
+# RouterOS Winbox / Terminal:
+#
+#   /snmp set enabled=yes contact="noc@example.com" location="Serverraum"
+#   /snmp community set [ find name=public ] name=COMMUNITY_NAME \
+#       addresses=192.168.178.0/24 read-access=yes write-access=no
+#
+# Oder über Winbox: IP → SNMP → Enabled ✓, Community bearbeiten
+#
+# Für SNMPv1 (ältere Switches/CSS):
+#   /snmp community set [ find name=public ] security=none
+#
+# Firewall-Regel (wenn Input-Chain aktiv):
+#   /ip firewall filter add chain=input protocol=udp dst-port=161 \
+#       src-address=192.168.178.0/24 action=accept comment="SNMP"
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 [mikrotik-switch]
-# Zugangsdaten (gemeinsam für alle Switches in dieser Datei)
+# ── Protokoll ────────────────────────────────────────────────────────────────
+# rest  = REST API (Standard, RouterOS 7.1+ erforderlich)
+# snmp  = SNMP     (RouterOS 6+, Windows-kompatibel, kein API-User nötig)
+mode = rest
+
+# ── REST API – nur bei mode=rest relevant ─────────────────────────────────────
 username   = admin
 password   = DEIN_PASSWORT
-
-# HTTP (Standard bei Switches) oder HTTPS
 use_https  = false
 port_rest  = 80
 verify_ssl = false
 
-# Alle Switches – eine IP pro Zeile oder kommagetrennt
+# ── SNMP – nur bei mode=snmp relevant ────────────────────────────────────────
+# Community muss mit /snmp community auf dem Switch übereinstimmen
+snmp_community = public
+snmp_port      = 161
+snmp_version   = 2c        # 2c (empfohlen) oder 1
+
+# ── Hosts ─────────────────────────────────────────────────────────────────────
+# Eine IP pro Zeile oder kommagetrennt
 hosts =
     192.168.178.23
     192.168.178.44
@@ -27,17 +63,23 @@ hosts =
 
 # ── Per-Switch-Overrides ──────────────────────────────────────────────────────
 # Format: [mikrotik-switch:IP]
-# Nur die angegebenen Felder überschreiben, Rest kommt aus [mikrotik-switch].
+# Nur die angegebenen Felder werden überschrieben, Rest kommt aus [mikrotik-switch].
 
+# Beispiel: anderes REST-Passwort
 [mikrotik-switch:192.168.178.44]
-# Dieser Switch hat ein anderes Passwort
 password = ANDERES_PASSWORT
 
+# Beispiel: HTTPS statt HTTP
 [mikrotik-switch:192.168.178.109]
-# Dieser Switch läuft auf HTTPS
 password   = DRITTES_PASSWORT
 use_https  = true
 port_rest  = 443
+
+# Beispiel: alter Switch ohne REST API → SNMP mit eigener Community
+# [mikrotik-switch:192.168.178.23]
+# mode           = snmp
+# snmp_community = geheim
+# snmp_version   = 1
 
 
 # ── NetAsset-Verbindung ───────────────────────────────────────────────────────
@@ -47,7 +89,7 @@ api_key        = sk-na-DEIN_KEY_HIER
 exposure_level = INTERN
 tags           = mikrotik,switch,netzwerk
 
-# Verbundene Geräte aus FDB (MAC-Adresstabelle) auch pushen?
+# Verbundene Geräte aus FDB (MAC-Adresstabelle) auch als Assets anlegen?
 push_neighbors = true
 
 timeout = 15
