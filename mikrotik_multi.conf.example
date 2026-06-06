@@ -1,25 +1,67 @@
+# ────────────────────────────────────────────────────────────────────────────
+# MikroTik Multi-Host Konfiguration
+#
+# Variante A – Gleiche Zugangsdaten für alle Geräte (einfachste Form)
+# Variante B – Per-Host-Passwörter via [mikrotik:IP]-Sections
+# Variante C – Mehrere Dateien (unterschiedliche Standorte/Passwörter)
+#
+# Aufruf:
+#   python3 mikrotik_collector.py -c mikrotik_multi.conf
+#   python3 mikrotik_collector.py -c standort1.conf -c standort2.conf
+# ────────────────────────────────────────────────────────────────────────────
+
 [mikrotik]
-# Gemeinsame Zugangsdaten fuer alle Geraete
-username = netasset
-password = SICHERES_PASSWORT
-use_https = false
-port_rest = 80
-verify_ssl = false
-mode = rest
+# ── Defaults (gelten für alle Hosts, sofern kein [mikrotik:IP] überschreibt) ──
+username    = admin
+password    = DEFAULT_PASSWORT
+use_https   = false
+port_rest   = 80
+verify_ssl  = false
+mode        = rest
 
-# SNMP-Fallback (falls REST nicht klappt)
 snmp_community = public
-snmp_port = 161
+snmp_port      = 161
 
-# Alle MikroTik-Geraete – eine IP pro Zeile oder kommagetrennt
+# Alle Hosts – eine IP pro Zeile oder kommagetrennt
 hosts =
     192.168.178.23
     192.168.178.24
     192.168.178.25
+    192.168.178.117
+    192.168.178.33
+    192.168.178.111
+    192.168.178.44
+    192.168.178.109
+    192.168.178.171
 
+
+# ── Per-Host-Overrides ────────────────────────────────────────────────────────
+# Format: [mikrotik:IP-ADRESSE]
+# Nur die angegebenen Felder werden überschrieben, Rest kommt aus [mikrotik].
+# Der Host muss NICHT nochmal in hosts= eingetragen sein – er wird automatisch
+# ergänzt, wenn er noch nicht in der Liste steht.
+
+[mikrotik:192.168.178.33]
+# Dieser Router hat ein anderes Passwort
+password = ANDERES_PASSWORT_1
+
+[mikrotik:192.168.178.111]
+# Anderer User + Passwort + Port
+username  = netasset
+password  = ANDERES_PASSWORT_2
+port_rest = 8443
+use_https = true
+
+[mikrotik:192.168.178.171]
+# Älteres Gerät → SNMP statt REST
+mode           = snmp
+snmp_community = meine_community
+
+
+# ── NetAsset-Verbindung ───────────────────────────────────────────────────────
 [netasset]
-api_url = https://<SERVER-URL>
-api_key = sk-na-DEIN_KEY_HIER
+api_url        = https://ocs.kiste.org
+api_key        = sk-na-DEIN_KEY_HIER
 exposure_level = INTERN
-tags = mikrotik,netzwerk
-timeout = 15
+tags           = mikrotik,netzwerk
+timeout        = 15

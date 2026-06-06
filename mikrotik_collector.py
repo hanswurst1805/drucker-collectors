@@ -58,50 +58,124 @@ CONF_PATHS = [
 ]
 
 
-def load_config(config_file: str | None = None) -> dict:
-    cfg = configparser.ConfigParser()
-    if config_file:
-        cfg.read(config_file)
-        log.info("Konfiguration: %s", config_file)
+def _section_to_config(s: dict, na: dict) -> dict:
+    """Wandelt einen configparser-Abschnitt in ein Config-Dict um."""
+    return {
+        "username":       os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
+        "password":       os.environ.get("MIKROTIK_PASS", s.get("password", "")),
+        "use_https":      s.get("use_https", "true").lower() == "true",
+        "verify_ssl":     s.get("verify_ssl", "false").lower() == "true",
+        "port_rest":      int(s.get("port_rest", "443")),
+        "snmp_community": s.get("snmp_community", "public"),
+        "snmp_port":      int(s.get("snmp_port", "161")),
+        "mode":           s.get("mode", "rest"),
+        "api_url":        os.environ.get("NETASSET_URL",     na.get("api_url",  "https://ocs.kiste.org")),
+        "api_key":        os.environ.get("NETASSET_API_KEY", na.get("api_key",  "")),
+        "exposure_level": na.get("exposure_level", "INTERN"),
+        "tags":           [t.strip() for t in na.get("tags", "mikrotik,router").split(",")],
+        "timeout":        int(na.get("timeout", "15")),
+    }
+
+
+def _parse_hosts(s: dict) -> list[str]:
+    """Liest hosts/host aus einem Config-Abschnitt."""
+    single = os.environ.get("MIKROTIK_HOST", s.get("host", ""))
+    multi_raw = s.get("hosts", "")
+    if multi_raw:
+        return [h.strip() for h in multi_raw.replace(",", "\n").splitlines() if h.strip()]
+    elif single:
+        return [single]
+    return []
+
+
+def load_configs(config_files: list[str] | None = None) -> list[dict]:
+    """
+    Lädt eine oder mehrere Config-Dateien und gibt eine Liste von
+    per-Host-Configs zurück.
+
+    Unterstützte Formate:
+    ─────────────────────
+    1. Mehrere Dateien via -c file1.conf -c file2.conf
+       Jede Datei hat ihren eigenen [mikrotik]-Block mit Credentials + hosts.
+
+    2. Per-Host-Sections in einer Datei:
+         [mikrotik]           ← Defaults + gemeinsame Hosts
+         username = admin
+         password = geheim
+
+         [mikrotik:192.168.1.5]   ← Überschreibt nur diesen Host
+         password = anderes_pw
+         port_rest = 8443
+    """
+    all_host_configs: list[dict] = []
+
+    files_to_read: list[str] = []
+    if config_files:
+        files_to_read = config_files
     else:
         for path in CONF_PATHS:
             if path.exists():
-                cfg.read(path)
-                log.info("Konfiguration: %s", path)
+                files_to_read = [str(path)]
                 break
 
-    s = cfg["mikrotik"] if "mikrotik" in cfg else {}
-    na = cfg["netasset"] if "netasset" in cfg else {}
+    if not files_to_read:
+        log.warning("Keine Config-Datei gefunden.")
+        return []
 
-    # Hosts: entweder "host = ..." (einzeln) oder "hosts = ..." (mehrzeilig/komma)
-    single_host = os.environ.get("MIKROTIK_HOST", s.get("host", ""))
-    multi_hosts_raw = s.get("hosts", "")
-    if multi_hosts_raw:
-        hosts = [h.strip() for h in multi_hosts_raw.replace(",", "\n").splitlines() if h.strip()]
-    elif single_host:
-        hosts = [single_host]
-    else:
-        hosts = []
+    for config_file in files_to_read:
+        cfg = configparser.ConfigParser()
+        cfg.read(config_file)
+        log.info("Konfiguration: %s", config_file)
 
-    return {
-        # MikroTik – gemeinsame Zugangsdaten
-        "host":  hosts[0] if hosts else "",   # Kompatibilität mit Single-Host-Logik
-        "hosts": hosts,
-        "username": os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
-        "password": os.environ.get("MIKROTIK_PASS", s.get("password", "")),
-        "use_https": s.get("use_https", "true").lower() == "true",
-        "verify_ssl": s.get("verify_ssl", "false").lower() == "true",
-        "port_rest": int(s.get("port_rest", "443")),
-        "snmp_community": s.get("snmp_community", "public"),
-        "snmp_port": int(s.get("snmp_port", "161")),
-        "mode": s.get("mode", "rest"),
-        # NetAsset
-        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")),
-        "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
-        "exposure_level": na.get("exposure_level", "INTERN"),
-        "tags": [t.strip() for t in na.get("tags", "mikrotik,router").split(",")],
-        "timeout": int(na.get("timeout", "15")),
-    }
+        if "mikrotik" not in cfg:
+            log.warning("%s: Kein [mikrotik]-Abschnitt gefunden, übersprungen.", config_file)
+            continue
+
+        defaults = cfg["mikrotik"]
+        na       = cfg["netasset"] if "netasset" in cfg else {}
+        base_cfg = _section_to_config(defaults, na)
+
+        # Hosts aus dem Default-Abschnitt
+        default_hosts = _parse_hosts(defaults)
+
+        # Per-Host-Sections: [mikrotik:IP] oder [mikrotik:hostname]
+        host_overrides: dict[str, dict] = {}
+        for section in cfg.sections():
+            if section.startswith("mikrotik:"):
+                host_ip = section.split(":", 1)[1].strip()
+                # Merge: Default-Config + Override-Werte
+                override = dict(defaults)
+                override.update(dict(cfg[section]))
+                host_overrides[host_ip] = _section_to_config(override, na)
+
+        # Hosts aus expliziten [mikrotik:IP]-Sections die NICHT in hosts= stehen
+        for host_ip in host_overrides:
+            if host_ip not in default_hosts:
+                default_hosts.append(host_ip)
+
+        if not default_hosts:
+            log.warning("%s: Keine Hosts konfiguriert.", config_file)
+            continue
+
+        for host in default_hosts:
+            # Override hat Vorrang vor Default
+            host_cfg = host_overrides.get(host, base_cfg).copy()
+            host_cfg["host"]  = host
+            host_cfg["hosts"] = [host]
+            all_host_configs.append(host_cfg)
+
+    return all_host_configs
+
+
+# Rückwärtskompatibilität für direkten import
+def load_config(config_file: str | None = None) -> dict:
+    configs = load_configs([config_file] if config_file else None)
+    if not configs:
+        return {"hosts": [], "host": ""}
+    # Alle Hosts zusammenführen (alte API: ein Dict mit hosts-Liste)
+    merged = configs[0].copy()
+    merged["hosts"] = [c["host"] for c in configs]
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -728,8 +802,40 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="NetAsset MikroTik Collector")
-    parser.add_argument("--config", "-c", help="Pfad zur Konfigurationsdatei")
+    parser = argparse.ArgumentParser(
+        description="NetAsset MikroTik Collector",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Beispiele:
+  # Einzelne Config
+  python3 mikrotik_collector.py -c mikrotik.conf
+
+  # Mehrere Configs mit unterschiedlichen Passwörtern
+  python3 mikrotik_collector.py -c site1.conf -c site2.conf -c office.conf
+
+  # Dry-Run über alle Configs
+  python3 mikrotik_collector.py -c site1.conf -c site2.conf --dry-run
+
+Config-Format mit per-Host-Passwörtern (eine Datei):
+  [mikrotik]
+  username = admin
+  password = standard_pw
+  hosts =
+      192.168.1.1
+      192.168.1.2
+
+  [mikrotik:192.168.1.3]   # Überschreibt nur diesen Host
+  password = anderes_pw
+  port_rest = 8443
+""",
+    )
+    parser.add_argument(
+        "--config", "-c",
+        action="append",
+        dest="configs",
+        metavar="FILE",
+        help="Config-Datei (mehrfach verwendbar: -c a.conf -c b.conf)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-neighbors", action="store_true", help="Keine Nachbarn pushen")
     parser.add_argument("--snmp", action="store_true", help="SNMP statt REST API erzwingen")
@@ -739,34 +845,37 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    config = load_config(args.config)
+    host_configs = load_configs(args.configs)
 
-    if not config["hosts"]:
+    if not host_configs:
         log.error("Kein Host konfiguriert. 'host' oder 'hosts' in der Config eintragen.")
         sys.exit(1)
 
-    if not config["api_key"] and not args.dry_run:
-        log.error("NETASSET_API_KEY nicht gesetzt.")
-        sys.exit(1)
+    if not args.dry_run:
+        missing_key = [c["host"] for c in host_configs if not c.get("api_key")]
+        if missing_key:
+            log.error("Kein API-Key für: %s", ", ".join(missing_key))
+            sys.exit(1)
 
-    hosts = config["hosts"]
-    log.info("Starte Scan: %d MikroTik-Gerät(e)", len(hosts))
+    log.info("Starte Scan: %d MikroTik-Gerät(e)", len(host_configs))
 
     errors = 0
-    for host in hosts:
-        log.info("─── %s ───", host)
-        # Host temporär in Config setzen für push()
-        host_config = {**config, "host": host}
+    for host_config in host_configs:
+        host = host_config["host"]
+        log.info("─── %s (user=%s, port=%s) ───",
+                 host, host_config["username"], host_config["port_rest"])
 
         try:
-            if args.snmp or config["mode"] == "snmp":
-                data = collect_snmp(host, config["snmp_community"], config["snmp_port"])
+            if args.snmp or host_config["mode"] == "snmp":
+                data = collect_snmp(host, host_config["snmp_community"], host_config["snmp_port"])
             else:
                 client = MikroTikREST(
-                    host, config["username"], config["password"],
-                    use_https=config["use_https"],
-                    port=config["port_rest"],
-                    verify_ssl=config["verify_ssl"],
+                    host,
+                    host_config["username"],
+                    host_config["password"],
+                    use_https=host_config["use_https"],
+                    port=host_config["port_rest"],
+                    verify_ssl=host_config["verify_ssl"],
                 )
                 data = client.collect()
         except Exception as e:
@@ -784,7 +893,7 @@ def main():
         push(host_config, data, push_neighbors=not args.no_neighbors, dry_run=args.dry_run)
 
     if not args.dry_run:
-        log.info("Fertig. %d/%d Geräte erfolgreich.", len(hosts) - errors, len(hosts))
+        log.info("Fertig. %d/%d Geräte erfolgreich.", len(host_configs) - errors, len(host_configs))
 
 
 if __name__ == "__main__":
