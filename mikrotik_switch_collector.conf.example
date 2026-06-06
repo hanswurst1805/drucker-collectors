@@ -1,0 +1,53 @@
+# ────────────────────────────────────────────────────────────────────────────
+# MikroTik-Switch Collector – Konfiguration
+#
+# Für CRS/CSS-Switches mit RouterOS und REST API (Port 80 HTTP oder 443 HTTPS)
+#
+# Aufruf:
+#   python3 mikrotik_switch_collector.py -c mikrotik_switch_collector.conf
+#   python3 mikrotik_switch_collector.py -c keller.conf -c eg.conf
+# ────────────────────────────────────────────────────────────────────────────
+
+[mikrotik-switch]
+# Zugangsdaten (gemeinsam für alle Switches in dieser Datei)
+username   = admin
+password   = DEIN_PASSWORT
+
+# HTTP (Standard bei Switches) oder HTTPS
+use_https  = false
+port_rest  = 80
+verify_ssl = false
+
+# Alle Switches – eine IP pro Zeile oder kommagetrennt
+hosts =
+    192.168.178.23
+    192.168.178.44
+    192.168.178.109
+
+
+# ── Per-Switch-Overrides ──────────────────────────────────────────────────────
+# Format: [mikrotik-switch:IP]
+# Nur die angegebenen Felder überschreiben, Rest kommt aus [mikrotik-switch].
+
+[mikrotik-switch:192.168.178.44]
+# Dieser Switch hat ein anderes Passwort
+password = ANDERES_PASSWORT
+
+[mikrotik-switch:192.168.178.109]
+# Dieser Switch läuft auf HTTPS
+password   = DRITTES_PASSWORT
+use_https  = true
+port_rest  = 443
+
+
+# ── NetAsset-Verbindung ───────────────────────────────────────────────────────
+[netasset]
+api_url        = https://ocs.kiste.org
+api_key        = sk-na-DEIN_KEY_HIER
+exposure_level = INTERN
+tags           = mikrotik,switch,netzwerk
+
+# Verbundene Geräte aus FDB (MAC-Adresstabelle) auch pushen?
+push_neighbors = true
+
+timeout = 15
