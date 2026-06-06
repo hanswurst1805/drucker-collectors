@@ -301,42 +301,105 @@ OID_VLAN_NAME    = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName
 OID_VLAN_EGRESS  = "1.3.6.1.2.1.17.7.1.4.3.1.2"  # dot1qVlanStaticEgressPorts
 
 
-def _snmp_import():
-    """Lazy import pysnmp – gibt hilfreiche Fehlermeldung wenn nicht installiert."""
-    try:
-        from pysnmp.hlapi import (                      # type: ignore[import]
-            SnmpEngine, CommunityData, UdpTransportTarget,
-            ContextData, ObjectType, ObjectIdentity,
-            getCmd, nextCmd,
-        )
-        return SnmpEngine, CommunityData, UdpTransportTarget, ContextData, \
-               ObjectType, ObjectIdentity, getCmd, nextCmd
-    except ImportError:
-        raise RuntimeError(
-            "pysnmp ist nicht installiert.\n"
-            "Bitte installieren:  pip install pysnmp\n"
-            "(Windows/Linux/macOS – kein externes Tool nötig)"
-        )
-
-
 def _mp_model(version: str) -> int:
     return 1 if version == "2c" else 0   # 0=SNMPv1, 1=SNMPv2c
 
 
-def _snmp_get(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> str:
-    (SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
-     ObjectType, ObjectIdentity, getCmd, _) = _snmp_import()
+def _snmp_check():
+    """Prüft ob pysnmp installiert ist und gibt die API-Variante zurück: 'v7' oder 'v4'."""
+    # pysnmp 7.x – async API unter pysnmp.hlapi.v3arch.asyncio
     try:
-        errorIndication, errorStatus, _, varBinds = next(
-            getCmd(
-                SnmpEngine(),
-                CommunityData(community, mpModel=_mp_model(version)),
-                UdpTransportTarget((host, port), timeout=5, retries=1),
-                ContextData(),
-                ObjectType(ObjectIdentity(oid)),
-            )
+        import pysnmp.hlapi.v3arch.asyncio  # noqa: F401
+        return "v7"
+    except ImportError:
+        pass
+    # pysnmp 4.x/5.x/6.x – synchrone hlapi
+    try:
+        import pysnmp.hlapi  # noqa: F401
+        # Prüfen ob getCmd synchron nutzbar (4.x hat es als Generator)
+        from pysnmp.hlapi import getCmd  # noqa: F401
+        return "v4"
+    except ImportError:
+        pass
+    raise RuntimeError(
+        "pysnmp ist nicht installiert.\n"
+        "Bitte installieren:  pip install pysnmp\n"
+        "(Windows/Linux/macOS – kein externes Tool nötig)"
+    )
+
+
+# ── pysnmp 7.x (async) ────────────────────────────────────────────────────────
+
+async def _snmp_get_async(host: str, community: str, oid: str, port: int, mp_model: int) -> str:
+    from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
+        SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity, getCmd,
+    )
+    engine = SnmpEngine()
+    try:
+        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
+        errorInd, errorStatus, _, varBinds = await getCmd(
+            engine,
+            CommunityData(community, mpModel=mp_model),
+            transport,
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
         )
-        if errorIndication or errorStatus:
+        if errorInd or errorStatus:
+            return ""
+        for vb in varBinds:
+            return str(vb[1]).strip().strip('"')
+    except Exception:
+        pass
+    finally:
+        engine.closeDispatcher()
+    return ""
+
+
+async def _snmp_walk_async(host: str, community: str, oid: str, port: int, mp_model: int) -> list:
+    from pysnmp.hlapi.v3arch.asyncio import (           # type: ignore[import]
+        SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity, nextCmd,
+    )
+    results = []
+    engine = SnmpEngine()
+    try:
+        transport = await UdpTransportTarget.create((host, port), timeout=5, retries=1)
+        async for errorInd, errorStatus, _, varBinds in nextCmd(
+            engine,
+            CommunityData(community, mpModel=mp_model),
+            transport,
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+            lexicographicMode=False,
+        ):
+            if errorInd or errorStatus:
+                break
+            for vb in varBinds:
+                results.append((str(vb[0]), vb[1]))
+    except Exception:
+        pass
+    finally:
+        engine.closeDispatcher()
+    return results
+
+
+# ── pysnmp 4.x/5.x (sync) ────────────────────────────────────────────────────
+
+def _snmp_get_v4(host: str, community: str, oid: str, port: int, mp_model: int) -> str:
+    from pysnmp.hlapi import (                          # type: ignore[import]
+        SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity, getCmd,
+    )
+    try:
+        errorInd, errorStatus, _, varBinds = next(getCmd(
+            SnmpEngine(),
+            CommunityData(community, mpModel=mp_model),
+            UdpTransportTarget((host, port), timeout=5, retries=1),
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+        ))
+        if errorInd or errorStatus:
             return ""
         for vb in varBinds:
             return str(vb[1]).strip().strip('"')
@@ -345,32 +408,54 @@ def _snmp_get(host: str, community: str, oid: str, port: int = 161, version: str
     return ""
 
 
-def _snmp_walk_str(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> dict[str, str]:
-    """Wie _snmp_walk, aber Werte sofort als str – für Integer/String-OIDs."""
-    return {k: str(v) for k, v in _snmp_walk(host, community, oid, port, version)}
-
-
-def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: str = "2c"):
-    """Gibt list[tuple[str, Any]] zurück – OID-String + rohes pysnmp-Wert-Objekt."""
-    (SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
-     ObjectType, ObjectIdentity, _, nextCmd) = _snmp_import()
+def _snmp_walk_v4(host: str, community: str, oid: str, port: int, mp_model: int) -> list:
+    from pysnmp.hlapi import (                          # type: ignore[import]
+        SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity, nextCmd,
+    )
     results = []
     try:
-        for errorIndication, errorStatus, _, varBinds in nextCmd(
+        for errorInd, errorStatus, _, varBinds in nextCmd(
             SnmpEngine(),
-            CommunityData(community, mpModel=_mp_model(version)),
+            CommunityData(community, mpModel=mp_model),
             UdpTransportTarget((host, port), timeout=5, retries=1),
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
             lexicographicMode=False,
         ):
-            if errorIndication or errorStatus:
+            if errorInd or errorStatus:
                 break
             for vb in varBinds:
                 results.append((str(vb[0]), vb[1]))
     except Exception:
         pass
     return results
+
+
+# ── Einheitliche Schnittstelle ────────────────────────────────────────────────
+
+def _snmp_get(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> str:
+    api   = _snmp_check()
+    model = _mp_model(version)
+    if api == "v7":
+        import asyncio
+        return asyncio.run(_snmp_get_async(host, community, oid, port, model))
+    return _snmp_get_v4(host, community, oid, port, model)
+
+
+def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> list:
+    """Gibt list[tuple[str, Any]] zurück – OID-String + rohes pysnmp-Wert-Objekt."""
+    api   = _snmp_check()
+    model = _mp_model(version)
+    if api == "v7":
+        import asyncio
+        return asyncio.run(_snmp_walk_async(host, community, oid, port, model))
+    return _snmp_walk_v4(host, community, oid, port, model)
+
+
+def _snmp_walk_str(host: str, community: str, oid: str, port: int = 161, version: str = "2c") -> dict[str, str]:
+    """Wie _snmp_walk, aber Werte sofort als str – für Integer/String-OIDs."""
+    return {k: str(v) for k, v in _snmp_walk(host, community, oid, port, version)}
 
 
 def _mac_from_snmp(val) -> str | None:
@@ -398,7 +483,7 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
     """Sammelt Switch-Daten via SNMP (IF-MIB + BRIDGE-MIB + Q-BRIDGE-MIB).
     Benötigt: pip install pysnmp
     """
-    _snmp_import()  # früh fehlschlagen wenn nicht installiert
+    _snmp_check()   # früh fehlschlagen wenn nicht installiert
 
     log.info("Verbinde per SNMP (%s, community=%s)...", host, community)
 
