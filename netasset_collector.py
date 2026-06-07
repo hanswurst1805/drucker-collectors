@@ -116,6 +116,109 @@ def osquery(sql: str, osquery_bin: str) -> list[dict]:
 # Datensammlung
 # ---------------------------------------------------------------------------
 
+def detect_virtualization(vendor: str, model: str, cpu: str) -> tuple[bool, str | None]:
+    """
+    Erkennt ob das System eine VM oder ein Container ist.
+    Wertet Hardware-Vendor/Model, CPU-String und OS-Hinweise aus.
+
+    Rückgabe: (is_vm, hypervisor_name)
+    hypervisor_name ist z.B. "vmware", "kvm", "virtualbox", "hyper-v", "xen",
+                              "aws-ec2", "gcp", "lxc", "docker", None (Bare Metal)
+    """
+    v = (vendor or "").lower()
+    m = (model  or "").lower()
+    c = (cpu    or "").lower()
+
+    # Tabelle: (Suchstring, Feld, Hypervisor-Tag)
+    SIGNATURES = [
+        ("vmware",         v, "vmware"),
+        ("vmware",         m, "vmware"),
+        ("virtualbox",     v, "virtualbox"),
+        ("innotek",        v, "virtualbox"),      # VirtualBox-Vendor
+        ("virtualbox",     m, "virtualbox"),
+        ("qemu",           v, "kvm"),
+        ("qemu",           m, "kvm"),
+        ("bochs",          v, "kvm"),
+        ("bochs",          m, "kvm"),
+        ("kvm",            m, "kvm"),
+        ("standard pc",    m, "kvm"),             # QEMU Standard PC
+        ("pc-i440fx",      m, "kvm"),
+        ("pc-q35",         m, "kvm"),
+        ("xen",            v, "xen"),
+        ("xen",            m, "xen"),
+        ("amazon ec2",     v, "aws-ec2"),
+        ("amazon",         v, "aws-ec2"),
+        ("google",         v, "gcp"),
+        ("google compute", m, "gcp"),
+        ("microsoft",      v, "hyper-v"),         # nur wenn model auch passt
+    ]
+
+    for needle, haystack, tag in SIGNATURES:
+        if needle in haystack:
+            # Sonderfall: Microsoft ist auch echter Hardware-Hersteller
+            if tag == "hyper-v" and "virtual" not in m and "hyper" not in m:
+                continue
+            return True, tag
+
+    # CPU-String: QEMU meldet sich manchmal im CPU-Namen
+    if "qemu" in c or "kvm" in c:
+        return True, "kvm"
+
+    # Linux-spezifisch: systemd-detect-virt
+    if platform.system() == "Linux":
+        try:
+            out = subprocess.check_output(
+                ["systemd-detect-virt", "--vm"],
+                stderr=subprocess.DEVNULL, timeout=3,
+            ).decode().strip().lower()
+            if out and out != "none":
+                known = {"kvm": "kvm", "qemu": "kvm", "vmware": "vmware",
+                         "microsoft": "hyper-v", "xen": "xen",
+                         "bochs": "kvm", "parallels": "parallels",
+                         "bhyve": "bhyve", "lxc": "lxc", "docker": "docker"}
+                return True, known.get(out, out)
+        except Exception:
+            pass
+
+        # Fallback: /proc/cpuinfo Hypervisor-Flag
+        try:
+            with open("/proc/cpuinfo") as f:
+                if "hypervisor" in f.read():
+                    return True, "kvm"  # generisch, KVM am häufigsten
+        except Exception:
+            pass
+
+        # Fallback: DMI product name
+        try:
+            with open("/sys/class/dmi/id/product_name") as f:
+                prod = f.read().strip().lower()
+            if any(x in prod for x in ("virtual", "vmware", "kvm", "qemu", "xen", "bochs")):
+                for x, tag in [("vmware","vmware"),("virtualbox","virtualbox"),
+                                ("kvm","kvm"),("qemu","kvm"),("xen","xen")]:
+                    if x in prod:
+                        return True, tag
+                return True, "vm"
+        except Exception:
+            pass
+
+    # Windows: WMI-Hersteller über osquery bereits abgedeckt (oben)
+    # macOS: VMs auf Mac selten, aber Parallels/VMware Fusion erkennbar über Vendor
+    if platform.system() == "Darwin":
+        try:
+            out = subprocess.check_output(
+                ["system_profiler", "SPHardwareDataType"],
+                stderr=subprocess.DEVNULL, timeout=5,
+            ).decode().lower()
+            if "vmware" in out or "parallels" in out or "virtual" in out:
+                if "vmware" in out: return True, "vmware"
+                if "parallels" in out: return True, "parallels"
+                return True, "vm"
+        except Exception:
+            pass
+
+    return False, None
+
+
 def collect_system_info(q) -> dict:
     """Basis-Systeminfos via osquery."""
     rows = q("SELECT hostname, uuid, cpu_brand, cpu_physical_cores, physical_memory, hardware_vendor, hardware_model, hardware_serial FROM system_info LIMIT 1")
@@ -134,14 +237,22 @@ def collect_system_info(q) -> dict:
     if uuid in ("", "0", "00000000-0000-0000-0000-000000000000"):
         uuid = None
 
+    vendor = row.get("hardware_vendor") or ""
+    model  = row.get("hardware_model")  or ""
+    cpu    = row.get("cpu_brand")       or ""
+
+    is_vm, hypervisor = detect_virtualization(vendor, model, cpu)
+
     return {
-        "hostname": row.get("hostname"),
-        "manufacturer": row.get("hardware_vendor"),
-        "model": row.get("hardware_model"),
+        "hostname":      row.get("hostname"),
+        "manufacturer":  vendor,
+        "model":         model,
         "serial_number": serial,
-        "chassis_id": uuid,   # Stable Key im Identity Resolver
-        "_cpu": row.get("cpu_brand"),
-        "_ram_bytes": row.get("physical_memory"),
+        "chassis_id":    uuid,   # Stable Key im Identity Resolver
+        "_cpu":          cpu,
+        "_ram_bytes":    row.get("physical_memory"),
+        "_is_vm":        is_vm,
+        "_hypervisor":   hypervisor,
     }
 
 
@@ -513,18 +624,31 @@ def main():
     ip, mac, ports = collect_network(q)
     packages = collect_packages(q)
 
+    # VM-Erkennung
+    is_vm      = sys_info.get("_is_vm", False)
+    hypervisor = sys_info.get("_hypervisor")
+
     # Asset-Typ ermitteln
-    asset_type = "client"
-    if platform.system() == "Linux":
+    if is_vm:
+        asset_type = "vm"
+    elif platform.system() == "Linux":
         asset_type = "server"
     elif platform.system() == "Windows":
         asset_type = "client"
     elif platform.system() == "Darwin":
         asset_type = "client"
+    else:
+        asset_type = "client"
 
     # Tags zusammenbauen
     tags = [t.strip() for t in config["tags"] if t.strip()]
     tags.append(f"os:{platform.system().lower()}")
+
+    # VM-Tags (dynamisch – werden bei jedem Lauf neu gesetzt)
+    if is_vm:
+        tags.append("vm")
+        if hypervisor:
+            tags.append(hypervisor)   # z.B. "kvm", "vmware", "virtualbox"
 
     device = {
         "hostname": sys_info.get("hostname") or platform.node(),
@@ -558,8 +682,9 @@ def main():
     if reboot:
         tags.append("reboot-required")
 
+    vm_info = f" [VM:{hypervisor or 'unbekannt'}]" if is_vm else " [Bare Metal]"
     log.info(
-        "Gesammelt: %s (%s %s), %d Ports, %d Pakete, %s ausstehende Updates%s",
+        "Gesammelt: %s (%s %s), %d Ports, %d Pakete, %s ausstehende Updates%s%s",
         device["hostname"],
         device["os_name"] or "?",
         device["os_version"] or "?",
@@ -567,6 +692,7 @@ def main():
         len(packages),
         str(pending) if pending is not None else "?",
         " [REBOOT]" if reboot else "",
+        vm_info,
     )
 
     if args.dry_run:
