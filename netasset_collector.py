@@ -72,7 +72,27 @@ def load_config() -> dict:
         "exposure_level": os.environ.get("NETASSET_EXPOSURE", section.get("exposure_level", "INTERN")),
         "osquery_bin": section.get("osquery_bin", ""),
         "timeout": int(section.get("timeout", "30")),
+        "min_confidence": _parse_min_confidence(
+            os.environ.get("NETASSET_MIN_CONFIDENCE", section.get("min_confidence", ""))
+        ),
     }
+
+
+def _parse_min_confidence(raw: str) -> float | None:
+    """
+    Parsed den min_confidence-Wert (0.0-1.0 oder 0-100 als Prozent).
+    Leer/ungültig → None (Server-Default bleibt unverändert).
+    """
+    raw = (raw or "").strip().rstrip("%")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value > 1.0:
+        value = value / 100.0
+    return max(0.0, min(1.0, value))
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +687,10 @@ def main():
         "tags": tags,
         "source": "osquery",
     }
+
+    # Mindest-Konfidenz für künftige automatische Merges (nur bei Neuanlage wirksam)
+    if config["min_confidence"] is not None:
+        device["min_confidence"] = config["min_confidence"]
 
     # Update-Status
     update_status = collect_update_status(q)

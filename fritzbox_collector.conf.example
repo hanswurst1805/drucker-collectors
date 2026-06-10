@@ -19,3 +19,7 @@ api_key = sk-na-DEIN_KEY_HIER
 exposure_level = INTERN
 tags = fritzbox,avm,heimnetz
 timeout = 15
+
+# Mindest-Konfidenz für automatische Merges (0.0-1.0 oder 0-100%)
+# Wird nur beim Anlegen NEUER Assets gesetzt. Empfehlung: 0.30-0.40
+# min_confidence = 0.35

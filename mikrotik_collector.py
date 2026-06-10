@@ -74,7 +74,24 @@ def _section_to_config(s: dict, na: dict) -> dict:
         "exposure_level": na.get("exposure_level", "INTERN"),
         "tags":           [t.strip() for t in na.get("tags", "mikrotik,router").split(",")],
         "timeout":        int(na.get("timeout", "15")),
+        "min_confidence": _parse_min_confidence(
+            os.environ.get("NETASSET_MIN_CONFIDENCE", na.get("min_confidence", ""))
+        ),
     }
+
+
+def _parse_min_confidence(raw: str) -> float | None:
+    """Parsed min_confidence (0.0-1.0 oder 0-100%). Leer/ungültig → None."""
+    raw = (raw or "").strip().rstrip("%")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value > 1.0:
+        value = value / 100.0
+    return max(0.0, min(1.0, value))
 
 
 def _parse_hosts(s: dict) -> list[str]:
@@ -770,6 +787,8 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
     device["exposure_level"] = config["exposure_level"]
     device["tags"]           = config["tags"] + vlan_tags + [asset_type]
     device["source"]         = "mikrotik-collector"
+    if config.get("min_confidence") is not None:
+        device["min_confidence"] = config["min_confidence"]
 
     # Nachbar-Devices aufbauen
     mikrotik_ip = device.get("ip_address")

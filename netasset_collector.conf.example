@@ -17,3 +17,9 @@ exposure_level = INTERN
 
 # HTTP-Timeout in Sekunden
 timeout = 30
+
+# Mindest-Konfidenz für automatische Merges/Konflikte (0.0-1.0 oder 0-100%)
+# Wird nur beim Anlegen NEUER Assets gesetzt. Schwache Treffer (1 Soft Key,
+# z.B. nur Hostname/IP) werden danach ignoriert statt automatisch gemerged.
+# Empfehlung: 0.30-0.40 (30-40%). Leer = Server-Default (0.0 = alles erlauben)
+# min_confidence = 0.35
