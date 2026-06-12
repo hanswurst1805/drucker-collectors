@@ -11,6 +11,7 @@ Agenten für [DRUCKER Infrastructure Intelligence](https://github.com/hanswurst1
 | `fritzbox_collector.py` | AVM Fritz!Box | TR-064 |
 | `network_discovery_agent.py` | Netzwerk-Scan | nmap |
 | `lynis_collector.py` | Linux Sicherheits-Audit | Lynis |
+| `eset_collector.py` | ESET PROTECT Cloud (verwaltete Endpoints) | ESET Connect API |
 
 ---
 
@@ -98,6 +99,22 @@ apt install lynis
 sudo lynis audit system
 python3 lynis_collector.py    # lädt /var/log/lynis-report.dat hoch
 ```
+
+### ESET PROTECT Cloud
+```bash
+cp eset_collector.conf.example /etc/netasset/eset_collector.conf
+nano /etc/netasset/eset_collector.conf   # region, API-User, token_url
+
+# Falls die Geräte-Felder vom Tenant abweichen, Rohdaten eines Geräts prüfen:
+python3 eset_collector.py --dump-raw
+
+python3 eset_collector.py --dry-run
+```
+
+Benötigt einen dedizierten **API-User** (nicht die normalen Login-Daten) und
+den OAuth2-Token-Endpoint deines Tenants aus der ESET Connect Swagger-UI:
+- API-User anlegen: https://help.eset.com/eset_connect/en-US/create_api_user_account.html
+- Authentifizierung: https://help.eset.com/eset_connect/en-US/authenticate_api_user.html
 
 ---
 

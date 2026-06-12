@@ -1,0 +1,25 @@
+[eset]
+# Region des ESET-Tenants: eu, de, us, ca, jpn
+region = eu
+
+# Dedizierter API-User (NICHT die normalen Konsolen-Zugangsdaten!)
+# Anlegen unter ESET PROTECT Hub / ESET Business Account -> API Users:
+# https://help.eset.com/eset_connect/en-US/create_api_user_account.html
+username =
+password =
+
+# OAuth2 Token-Endpoint deines Tenants (Swagger-UI -> Authentication):
+# https://help.eset.com/eset_connect/en-US/authenticate_api_user.html
+token_url =
+
+[netasset]
+api_url = https://<SERVER-URL>
+api_key = sk-na-DEIN_KEY_HIER
+exposure_level = INTERN
+tags = eset,managed-endpoint
+timeout = 30
+
+# Mindest-Konfidenz für automatische Merges (0.0-1.0 oder 0-100%)
+# ESET liefert Hostname/IP/MAC/Serial - meist zuverlässig genug für direktes
+# Anlegen neuer Assets. Bei Unsicherheit z.B. 0.40 setzen.
+# min_confidence = 0.40
