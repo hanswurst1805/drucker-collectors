@@ -5,7 +5,10 @@
 # Aufruf: bash install_macos.sh
 set -euo pipefail
 
-INSTALL_DIR="$HOME/Library/NetAsset/Collector"
+# Verzeichnis, in dem dieses Skript liegt (= Git-Checkout). Der LaunchAgent
+# läuft direkt von hier aus, damit "git pull" die laufende Version aktualisiert.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
 CONF_DIR="$HOME/Library/NetAsset"
 LAUNCH_AGENT="$HOME/Library/LaunchAgents/org.netasset.collector.plist"
 LOG_FILE="$HOME/Library/Logs/netasset-collector.log"
@@ -42,15 +45,14 @@ if ! command -v python3 &>/dev/null; then
     fi
 fi
 
-# 3. Collector-Dateien kopieren
-echo "==> Installiere Collector nach $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR" "$CONF_DIR"
-cp netasset_collector.py "$INSTALL_DIR/"
+# 3. Collector ausführbar machen, Config-Verzeichnis anlegen
+echo "==> Verwende Collector aus $INSTALL_DIR"
+mkdir -p "$CONF_DIR"
 chmod +x "$INSTALL_DIR/netasset_collector.py"
 
 # 4. Konfiguration anlegen
 if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
-    cp netasset_collector.conf.example "$CONF_DIR/netasset_collector.conf"
+    cp "$SCRIPT_DIR/netasset_collector.conf.example" "$CONF_DIR/netasset_collector.conf"
     echo ""
     echo "  WICHTIG: Konfiguration anpassen:"
     echo "  open -e $CONF_DIR/netasset_collector.conf"

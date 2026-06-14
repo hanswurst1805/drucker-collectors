@@ -11,7 +11,9 @@
 
 set -euo pipefail
 
-INSTALL_DIR="$HOME/Library/NetAsset/Collector"
+# Verzeichnis, in dem dieses Skript liegt (= Git-Checkout des Collectors)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
 CONF_DIR="$HOME/Library/NetAsset"
 LOG_FILE="$HOME/Library/Logs/drucker-collector.log"
 PLIST="$HOME/Library/LaunchAgents/org.drucker.collector.plist"
