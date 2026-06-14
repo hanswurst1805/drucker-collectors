@@ -8,10 +8,6 @@ region = eu
 username =
 password =
 
-# OAuth2 Token-Endpoint deines Tenants (Swagger-UI -> Authentication):
-# https://help.eset.com/eset_connect/en-US/authenticate_api_user.html
-token_url =
-
 [netasset]
 api_url = https://<SERVER-URL>
 api_key = sk-na-DEIN_KEY_HIER

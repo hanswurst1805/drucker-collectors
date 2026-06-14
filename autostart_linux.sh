@@ -14,7 +14,9 @@
 
 set -euo pipefail
 
-INSTALL_DIR="/opt/netasset-collector"
+# Verzeichnis, in dem dieses Skript liegt (= Git-Checkout des Collectors)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
 CONF_DIR="/etc/netasset"
 LOG_FILE="/var/log/drucker-collector.log"
 SERVICE_NAME="drucker-collector"

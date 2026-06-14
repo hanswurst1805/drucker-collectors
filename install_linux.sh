@@ -5,7 +5,10 @@
 # Aufruf: sudo bash install_linux.sh
 set -euo pipefail
 
-INSTALL_DIR="/opt/netasset-collector"
+# Verzeichnis, in dem dieses Skript liegt (= Git-Checkout). Der Cron-Job
+# läuft direkt von hier aus, damit "git pull" die laufende Version aktualisiert.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
 CONF_DIR="/etc/netasset"
 CRON_FILE="/etc/cron.d/netasset-collector"
 
@@ -41,15 +44,14 @@ if ! command -v python3 &>/dev/null; then
     apt-get install -y python3 2>/dev/null || yum install -y python3 2>/dev/null || true
 fi
 
-# 3. Collector-Dateien kopieren
-echo "==> Installiere Collector nach $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR" "$CONF_DIR"
-cp netasset_collector.py "$INSTALL_DIR/"
+# 3. Collector ausführbar machen, Config-Verzeichnis anlegen
+echo "==> Verwende Collector aus $INSTALL_DIR"
+mkdir -p "$CONF_DIR"
 chmod +x "$INSTALL_DIR/netasset_collector.py"
 
 # 4. Konfiguration anlegen (wenn noch nicht vorhanden)
 if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
-    cp netasset_collector.conf.example "$CONF_DIR/netasset_collector.conf"
+    cp "$SCRIPT_DIR/netasset_collector.conf.example" "$CONF_DIR/netasset_collector.conf"
     echo ""
     echo "  WICHTIG: Konfiguration anpassen:"
     echo "  nano $CONF_DIR/netasset_collector.conf"
@@ -58,9 +60,9 @@ if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
 fi
 
 # 5. Cron-Job einrichten (stündlich)
-cat > "$CRON_FILE" << 'EOF'
+cat > "$CRON_FILE" << EOF
 # NetAsset Collector – stündlich
-0 * * * * root /usr/bin/python3 /opt/netasset-collector/netasset_collector.py >> /var/log/netasset-collector.log 2>&1
+0 * * * * root /usr/bin/python3 $INSTALL_DIR/netasset_collector.py >> /var/log/netasset-collector.log 2>&1
 EOF
 chmod 644 "$CRON_FILE"
 

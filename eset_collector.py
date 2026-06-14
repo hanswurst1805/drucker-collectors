@@ -11,9 +11,9 @@ Voraussetzungen:
   - Dedizierter API-User (ESET PROTECT Hub / ESET Business Account ->
     Mein Profil / API Users), siehe:
     https://help.eset.com/eset_connect/en-US/create_api_user_account.html
-  - Region des Tenants (eu/de/us/ca/jpn) und OAuth2-Token-Endpoint, siehe
-    Swagger-UI deines Tenants -> Authentication
-    https://help.eset.com/eset_connect/en-US/authenticate_api_user.html
+  - Region des Tenants (eu/de/us/ca/jpn); der OAuth2-Token-Endpoint ergibt
+    sich automatisch daraus
+    (https://{region}.business-account.iam.eset.systems/oauth/token)
 
 Aufruf:
   python3 eset_collector.py               # Upload
@@ -79,7 +79,6 @@ def load_config() -> dict:
         "region": region,
         "username": os.environ.get("ESET_USER", es.get("username", "")),
         "password": os.environ.get("ESET_PASS", es.get("password", "")),
-        "token_url": os.environ.get("ESET_TOKEN_URL", es.get("token_url", "")),
         "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")),
         "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
         "exposure_level": na.get("exposure_level", "INTERN"),
@@ -111,14 +110,8 @@ def _parse_min_confidence(raw: str) -> float | None:
 
 def get_token(config: dict) -> str:
     """OAuth2 Password-Grant gegen den ESET Identity Provider."""
-    token_url = config["token_url"]
-    if not token_url:
-        log.error(
-            "Kein token_url konfiguriert. Bitte in eset_collector.conf [eset] "
-            "token_url= aus der Swagger-UI deines Tenants (Authentication) "
-            "eintragen: https://help.eset.com/eset_connect/en-US/authenticate_api_user.html"
-        )
-        sys.exit(1)
+    host = REGION_HOST[config["region"]]
+    token_url = f"https://{host}.business-account.iam.eset.systems/oauth/token"
 
     body = urllib.parse.urlencode({
         "grant_type": "password",

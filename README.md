@@ -103,7 +103,7 @@ python3 lynis_collector.py    # lädt /var/log/lynis-report.dat hoch
 ### ESET PROTECT Cloud
 ```bash
 cp eset_collector.conf.example /etc/netasset/eset_collector.conf
-nano /etc/netasset/eset_collector.conf   # region, API-User, token_url
+nano /etc/netasset/eset_collector.conf   # region, API-User
 
 # Falls die Geräte-Felder vom Tenant abweichen, Rohdaten eines Geräts prüfen:
 python3 eset_collector.py --dump-raw
@@ -111,10 +111,21 @@ python3 eset_collector.py --dump-raw
 python3 eset_collector.py --dry-run
 ```
 
-Benötigt einen dedizierten **API-User** (nicht die normalen Login-Daten) und
-den OAuth2-Token-Endpoint deines Tenants aus der ESET Connect Swagger-UI:
-- API-User anlegen: https://help.eset.com/eset_connect/en-US/create_api_user_account.html
-- Authentifizierung: https://help.eset.com/eset_connect/en-US/authenticate_api_user.html
+Benötigt einen dedizierten **API-User** (nicht die normalen Login-Daten),
+siehe: https://help.eset.com/eset_connect/en-US/create_api_user_account.html
+
+#### Status-Check (ohne NetAsset)
+
+Eigenständiges Skript `eset_status.py` zeigt direkt im Terminal den Zustand
+aller ESET-Endpoints (Schutzstatus, OS, letzte Synchronisation) sowie offene
+Alarme/Detections – unabhängig von NetAsset, nur zum Prüfen des API-Zugriffs:
+
+```bash
+# Region, API-User und Passwort direkt im Skript (CONFIG-Block) eintragen
+python3 eset_status.py
+python3 eset_status.py --days 7    # Alarme der letzten 7 Tage
+python3 eset_status.py --raw       # Rohdaten als JSON
+```
 
 ---
 
