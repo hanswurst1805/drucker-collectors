@@ -1,0 +1,11 @@
+[netasset]
+api_url = https://<SERVER-URL>
+api_key = sk-na-DEIN_KEY_HIER
+timeout = 30
+
+[jump]
+# Optionale Whitelist erlaubter Ziele (host, kommagetrennt). Leer = alle erlaubt.
+# allow_targets = web01.intern, db01.intern, 10.0.0.5
+
+# Zusätzliche SSH-Optionen für die Verbindung zum Ziel (optional).
+# ssh_options = -o StrictHostKeyChecking=accept-new

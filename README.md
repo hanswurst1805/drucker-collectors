@@ -12,6 +12,7 @@ Agenten für [DRUCKER Infrastructure Intelligence](https://github.com/hanswurst1
 | `network_discovery_agent.py` | Netzwerk-Scan | nmap |
 | `lynis_collector.py` | Linux Sicherheits-Audit | Lynis |
 | `eset_collector.py` | ESET PROTECT Cloud (verwaltete Endpoints) | ESET Connect API |
+| `na_jump.py` | Jumpbox (Bastion) | Aufgezeichnete SSH-Session zu Zielhosts |
 
 ---
 
@@ -113,6 +114,15 @@ python3 eset_collector.py --dry-run
 
 Benötigt einen dedizierten **API-User** (nicht die normalen Login-Daten),
 siehe: https://help.eset.com/eset_connect/en-US/create_api_user_account.html
+
+### Jumpbox – aufgezeichnete SSH-Sessions
+
+`na_jump.py` (Jumpbox) zeichnet SSH-Sessions zu Zielhosts auf und lädt sie an
+NetAsset; `na_cmdlog.sh` + `na_cmdlog_upload.py` protokollieren zielseitig die
+ausgeführten Kommandos. Beide werden über eine Session-UUID korreliert.
+
+Vollständige Einrichtung (Jumpbox, sshd ForceCommand, Zielhosts):
+siehe [docs/jumpbox_session_recording.md](docs/jumpbox_session_recording.md).
 
 #### Status-Check (ohne NetAsset)
 
