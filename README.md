@@ -124,6 +124,11 @@ ausgeführten Kommandos. Beide werden über eine Session-UUID korreliert.
 Vollständige Einrichtung (Jumpbox, sshd ForceCommand, Zielhosts):
 siehe [docs/jumpbox_session_recording.md](docs/jumpbox_session_recording.md).
 
+**Einfachere Variante (ohne Jumpbox):** `na_screen_rec.sh` zeichnet direkt auf
+dem Zielserver per `screen` jede interaktive SSH-Session lokal auf und lädt sie
+nach dem Logout an NetAsset (`na_screen_upload.py`). Siehe
+[docs/screen_session_recording.md](docs/screen_session_recording.md).
+
 #### Status-Check (ohne NetAsset)
 
 Eigenständiges Skript `eset_status.py` zeigt direkt im Terminal den Zustand
