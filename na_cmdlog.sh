@@ -1,5 +1,7 @@
 # NetAsset Kommando-Logging für Jumpbox-Sessions
-# Installation: nach /etc/profile.d/na_cmdlog.sh kopieren.
+# Liegt im drucker-collectors Checkout (z.B. /opt/drucker-collectors) und wird
+# über einen kleinen Stub in /etc/profile.d eingebunden (siehe docs), damit
+# "git pull" die laufende Version aktualisiert.
 #
 # Aktiviert sich NUR, wenn die Session über die Jumpbox kam (NA_SESSION_ID
 # gesetzt; via sshd "AcceptEnv NA_SESSION_ID" + na-jump SetEnv). Protokolliert
@@ -14,8 +16,10 @@ case "$-" in *i*) ;; *) return 2>/dev/null || true ;; esac
 
 __NA_CMDLOG_FILE="$(mktemp /tmp/na-cmdlog.XXXXXX 2>/dev/null)" || return
 __NA_CMD_SEQ=0
-__NA_UPLOADER="/etc/netasset/na_cmdlog_upload.py"
-[ -f "$__NA_UPLOADER" ] || __NA_UPLOADER="/opt/netasset-collector/na_cmdlog_upload.py"
+# Uploader aus dem drucker-collectors Checkout (mit Fallbacks)
+__NA_UPLOADER="/opt/drucker-collectors/na_cmdlog_upload.py"
+[ -f "$__NA_UPLOADER" ] || __NA_UPLOADER="$HOME/drucker-collectors/na_cmdlog_upload.py"
+[ -f "$__NA_UPLOADER" ] || __NA_UPLOADER="/etc/netasset/na_cmdlog_upload.py"
 
 __na_log_cmd() {
     local rc=$?

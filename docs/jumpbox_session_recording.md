@@ -73,12 +73,18 @@ Voraussetzung: Der Zielhost läuft bereits mit dem `netasset_collector`
 (d.h. `/etc/netasset/netasset_collector.conf` mit `api_url`/`api_key` vorhanden) –
 diese Zugangsdaten werden wiederverwendet, ein eigener Key ist nicht nötig.
 
+Hook + Uploader bleiben im Checkout (`/opt/drucker-collectors`), damit
+`git pull` sie aktualisiert. In `/etc/profile.d` liegt nur ein kleiner Stub,
+der den Hook aus dem Checkout einbindet:
+
 ```bash
-# Kommando-Hook + Uploader installieren
-sudo cp na_cmdlog.sh /etc/profile.d/na_cmdlog.sh
-sudo cp na_cmdlog_upload.py /etc/netasset/na_cmdlog_upload.py
-sudo chmod +x /etc/netasset/na_cmdlog_upload.py
+# drucker-collectors ist bereits ausgecheckt (z.B. /opt/drucker-collectors)
+echo '[ -r /opt/drucker-collectors/na_cmdlog.sh ] && . /opt/drucker-collectors/na_cmdlog.sh' \
+    | sudo tee /etc/profile.d/na_cmdlog.sh
 ```
+
+Der Uploader (`na_cmdlog_upload.py`) wird automatisch aus dem Checkout
+verwendet – nichts weiter zu kopieren.
 
 Damit die Session-UUID von der Jumpbox ankommt, muss der sshd des Zielhosts
 die Variable akzeptieren – in `/etc/ssh/sshd_config`:

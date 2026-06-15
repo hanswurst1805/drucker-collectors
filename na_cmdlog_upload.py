@@ -23,7 +23,8 @@ from pathlib import Path
 
 CONF_PATHS = [
     Path("/etc/netasset/netasset_collector.conf"),
-    Path("/opt/netasset-collector/netasset_collector.conf"),
+    Path("/opt/drucker-collectors/netasset_collector.conf"),
+    Path.home() / "drucker-collectors/netasset_collector.conf",
     Path.home() / "Library/NetAsset/netasset_collector.conf",
 ]
 
