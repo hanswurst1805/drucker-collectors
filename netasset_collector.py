@@ -392,20 +392,44 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict], list[dict]]:
                     "reachable_from": ["intern"],
                 })
 
-    # Docker-Container hinter den Ports auflösen (best effort)
-    containers = {c.get("id"): c for c in q("SELECT id, name, image FROM docker_containers")}
-    for row in q("SELECT id, port, type, host_ip, host_port FROM docker_container_ports"):
-        try:
-            host_port = int(row.get("host_port") or 0)
-        except (TypeError, ValueError):
-            continue
-        cont = containers.get(row.get("id"), {})
+    # Container hinter den Ports auflösen – Docker UND Podman (best effort)
+    for c in collect_containers():
         for s in services:
-            if s["port"] == host_port:
-                s["container_name"] = cont.get("name")
-                s["container_image"] = cont.get("image")
+            if s["port"] == c["host_port"]:
+                s["container_name"] = c["name"]
+                s["container_image"] = c["image"]
 
     return ip_address, mac_address, open_ports, services
+
+
+def collect_containers() -> list[dict]:
+    """
+    Host-Port → Container (Name/Image) via CLI – deckt Docker und Podman ab.
+    Liefert [] wenn keine Engine vorhanden/erreichbar (z.B. rootless ohne Rechte).
+    """
+    import re
+    results: list[dict] = []
+    for engine in ("docker", "podman"):
+        if not shutil.which(engine):
+            continue
+        try:
+            out = subprocess.check_output(
+                [engine, "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"],
+                stderr=subprocess.DEVNULL, timeout=8, text=True,
+            )
+        except Exception:
+            continue
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            _id, name, image, ports = parts[0], parts[1], parts[2], parts[3]
+            # z.B. "0.0.0.0:8080->80/tcp, 127.0.0.1:5432->5432/tcp"
+            for m in re.finditer(r"(?::)?(\d+)->\d+/(?:tcp|udp)", ports):
+                results.append({"host_port": int(m.group(1)), "name": name, "image": image})
+        if results:
+            break  # eine Engine mit Treffern genügt
+    return results
 
 
 def collect_update_status(q) -> dict:
