@@ -289,7 +289,7 @@ def collect_os_info(q) -> dict:
     }
 
 
-def collect_network(q) -> tuple[str | None, str | None, list[dict]]:
+def collect_network(q) -> tuple[str | None, str | None, list[dict], list[dict]]:
     """IP, MAC und offene Ports via osquery.
     Nutzt die Default-Route um das primäre IPv4-Interface zu bestimmen.
     """
@@ -342,35 +342,70 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict]]:
             ip_address = ifaces[0].get("address")
             mac_address = ifaces[0].get("mac")
 
-    # Offene Ports (listening)
+    # Offene Ports/Dienste (listening) – inkl. localhost-Binds (z.B. Docker)
     ports_raw = q("""
-        SELECT DISTINCT lp.port, lp.protocol, lp.address, p.name as process_name
+        SELECT DISTINCT lp.port, lp.protocol, lp.address,
+               p.name AS process_name, p.path AS process_path
         FROM listening_ports lp
         LEFT JOIN processes p ON lp.pid = p.pid
-        WHERE lp.address != '127.0.0.1'
-          AND lp.address != '::1'
-          AND lp.port > 0
+        WHERE lp.port > 0
         ORDER BY lp.port
     """)
 
-    proto_map = {"6": "tcp", "17": "udp"}
-    open_ports = []
-    seen = set()
-    for p in ports_raw:
-        port = int(p.get("port", 0))
-        proto = proto_map.get(str(p.get("protocol", "6")), "tcp")
-        key = (port, proto)
-        if key in seen or port == 0:
-            continue
-        seen.add(key)
-        open_ports.append({
-            "port": port,
-            "proto": proto,
-            "service": p.get("process_name") or None,
-            "reachable_from": ["intern"],
-        })
+    def _scope(addr):
+        a = (addr or "").strip()
+        if a in ("127.0.0.1", "::1"):
+            return "localhost"
+        if a in ("0.0.0.0", "::", ""):
+            return "all"
+        return "lan"
 
-    return ip_address, mac_address, open_ports
+    proto_map = {"6": "tcp", "17": "udp"}
+    open_ports, services = [], []
+    seen_op, seen_svc = set(), set()
+    for p in ports_raw:
+        port = int(p.get("port") or 0)
+        if port <= 0:
+            continue
+        proto = proto_map.get(str(p.get("protocol", "6")), "tcp")
+        addr = p.get("address")
+        scope = _scope(addr)
+
+        skey = (port, proto, addr)
+        if skey not in seen_svc:
+            seen_svc.add(skey)
+            services.append({
+                "port": port, "proto": proto,
+                "bind_address": addr, "bind_scope": scope,
+                "process_name": p.get("process_name") or None,
+                "process_path": p.get("process_path") or None,
+            })
+
+        # open_ports: nur extern/LAN-erreichbare (Abwärtskompatibilität)
+        if scope != "localhost":
+            okey = (port, proto)
+            if okey not in seen_op:
+                seen_op.add(okey)
+                open_ports.append({
+                    "port": port, "proto": proto,
+                    "service": p.get("process_name") or None,
+                    "reachable_from": ["intern"],
+                })
+
+    # Docker-Container hinter den Ports auflösen (best effort)
+    containers = {c.get("id"): c for c in q("SELECT id, name, image FROM docker_containers")}
+    for row in q("SELECT id, port, type, host_ip, host_port FROM docker_container_ports"):
+        try:
+            host_port = int(row.get("host_port") or 0)
+        except (TypeError, ValueError):
+            continue
+        cont = containers.get(row.get("id"), {})
+        for s in services:
+            if s["port"] == host_port:
+                s["container_name"] = cont.get("name")
+                s["container_image"] = cont.get("image")
+
+    return ip_address, mac_address, open_ports, services
 
 
 def collect_update_status(q) -> dict:
@@ -641,7 +676,7 @@ def main():
     # Daten sammeln
     sys_info = collect_system_info(q)
     os_info = collect_os_info(q)
-    ip, mac, ports = collect_network(q)
+    ip, mac, ports, services = collect_network(q)
     packages = collect_packages(q)
 
     # VM-Erkennung
@@ -684,6 +719,7 @@ def main():
         "model": sys_info.get("model"),
         "exposure_level": config["exposure_level"],
         "open_ports": ports,
+        "services": services,
         "tags": tags,
         "source": "osquery",
     }
