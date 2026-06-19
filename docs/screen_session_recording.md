@@ -6,6 +6,27 @@ Bei einem interaktiven SSH-Login landet der User automatisch in einer
 (`POST /api/v1/sessions/ingest`) und erscheint dort unter „Audit-Sessions".
 Die Logdatei bleibt zusätzlich lokal erhalten.
 
+## Ablauf aus Anwendersicht (so ist es gebaut)
+
+1. **Ganz normal einloggen** – nichts Besonderes zu tun:
+   ```bash
+   ssh wartung@zielhost
+   ```
+2. Du landest **automatisch in einer aufgezeichneten `screen`-Session**
+   (Hinweis im Terminal: `[na-screen] Session wird aufgezeichnet: …`).
+   Ab hier arbeitest du wie gewohnt – alles, was du tust, wird mitgeschnitten.
+3. **screen bequem nutzen** (optional):
+   - Abdocken ohne zu beenden: `Ctrl-A` dann `d` (Session läuft im Hintergrund weiter)
+   - Wieder andocken nach erneutem Login: `screen -r`
+   - Mehrere Fenster: `Ctrl-A` dann `c` (neu), `Ctrl-A` dann `n`/`p` (wechseln)
+4. **Beenden** mit `exit` (bzw. `Ctrl-D`). Beim Verlassen der screen-Session
+   wird die Aufzeichnung **automatisch an NetAsset übertragen** und ist dort
+   unter „Audit-Sessions" sowie am betroffenen Host einsehbar.
+
+> Wichtig: Sauber per `exit` beenden. Nur **abdocken** (`Ctrl-A d`) lädt zwar das
+> bisherige Log hoch, lässt die Session aber im Hintergrund weiterlaufen –
+> beim nächsten `screen -r` arbeitest du in derselben Aufzeichnung weiter.
+
 ## 1. Skripte installieren
 
 ```bash
