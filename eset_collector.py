@@ -30,6 +30,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logging.basicConfig(
@@ -285,6 +286,75 @@ def push(config: dict, assets: list[dict], dry_run: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Alarme / Detections (Incident Management)
+# ---------------------------------------------------------------------------
+
+def fetch_detections(config: dict, token: str, days: int) -> list[dict]:
+    """Lädt Detections der letzten N Tage über /v2/detections (paginiert)."""
+    host = REGION_HOST[config["region"]]
+    base = f"https://{host}.incident-management.eset.systems/v2/detections"
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    out: list[dict] = []
+    page_token = None
+    while True:
+        params = {"pageSize": "200", "startTime": start}
+        if page_token:
+            params["pageToken"] = page_token
+        url = base + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=config["timeout"]) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            log.warning("Detections-Abfrage fehlgeschlagen (%d): %s",
+                        e.code, e.read().decode(errors="replace")[:300])
+            break
+        out.extend(data.get("detections", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    log.info("ESET Incident: %d Alarme (letzte %d Tage)", len(out), days)
+    return out
+
+
+def map_detection(d: dict) -> dict | None:
+    dev = d.get("device") or {}
+    ext = d.get("uuid") or d.get("id")
+    if not ext:
+        return None
+    return {
+        "external_id": str(ext),
+        "source": "eset",
+        "device_uuid": dev.get("uuid"),
+        "device_name": dev.get("displayName"),
+        "severity": d.get("severityLevel"),
+        "severity_score": d.get("severityScore"),
+        "threat": d.get("displayName") or d.get("typeName"),
+        "type_name": d.get("typeName"),
+        "category": d.get("category"),
+        "resolved": bool(d.get("resolved", False)),
+        "occurred_at": d.get("occurTime"),
+        "user_name": d.get("userName"),
+    }
+
+
+def push_alerts(config: dict, alerts: list[dict], dry_run: bool = False):
+    if dry_run:
+        print(f"\n=== ALARME ({len(alerts)}) – DRY RUN ===")
+        for a in alerts[:15]:
+            print(f"  {(a.get('severity') or '—'):<12} {(a.get('device_name') or '—'):<28} {a.get('threat') or ''}")
+        return
+    base = config["api_url"].rstrip("/")
+    created = updated = 0
+    for i in range(0, len(alerts), 200):
+        res = api_post(f"{base}/api/v1/alerts/ingest", config["api_key"], alerts[i:i + 200], config["timeout"])
+        created += (res or {}).get("created", 0)
+        updated += (res or {}).get("updated", 0)
+    log.info("Alarme: %d neu, %d aktualisiert", created, updated)
+
+
+# ---------------------------------------------------------------------------
 # Einstieg
 # ---------------------------------------------------------------------------
 
@@ -292,6 +362,8 @@ def main():
     parser = argparse.ArgumentParser(description="NetAsset ESET PROTECT Cloud Collector")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dump-raw", action="store_true", help="Rohdaten des ersten Geräts ausgeben")
+    parser.add_argument("--no-alerts", action="store_true", help="Detections/Alarme nicht abrufen")
+    parser.add_argument("--alert-days", type=int, default=30, help="Alarme der letzten N Tage (Default 30)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -317,6 +389,12 @@ def main():
 
     assets = [a for a in (map_device(d, config) for d in devices) if a]
     push(config, assets, dry_run=args.dry_run)
+
+    if not args.no_alerts:
+        detections = fetch_detections(config, token, args.alert_days)
+        alerts = [m for m in (map_detection(x) for x in detections) if m]
+        push_alerts(config, alerts, dry_run=args.dry_run)
+
     if not args.dry_run:
         log.info("Fertig.")
 
