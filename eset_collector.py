@@ -290,9 +290,12 @@ def push(config: dict, assets: list[dict], dry_run: bool = False):
 # ---------------------------------------------------------------------------
 
 def fetch_detections(config: dict, token: str, days: int) -> list[dict]:
-    """Lädt Detections der letzten N Tage über /v2/detections (paginiert)."""
+    """
+    Lädt Endpoint-Detections der letzten N Tage über /v1/detections (paginiert).
+    (v2/detections ist ESET Cloud Office; für ESET-PROTECT-Endpoints gilt v1.)
+    """
     host = REGION_HOST[config["region"]]
-    base = f"https://{host}.incident-management.eset.systems/v2/detections"
+    base = f"https://{host}.incident-management.eset.systems/v1/detections"
     start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     out: list[dict] = []
@@ -318,24 +321,35 @@ def fetch_detections(config: dict, token: str, days: int) -> list[dict]:
     return out
 
 
+def _strip_enum(v, prefix):
+    """ESET-Enums entpräfixen: SEVERITY_LEVEL_HIGH -> HIGH, DETECTION_CATEGORY_ANTIVIRUS -> ANTIVIRUS."""
+    if isinstance(v, str) and v.startswith(prefix):
+        return v[len(prefix):]
+    return v
+
+
 def map_detection(d: dict) -> dict | None:
-    dev = d.get("device") or {}
+    """Mapping für /v1/detections (Endpoint-Detections)."""
     ext = d.get("uuid") or d.get("id")
     if not ext:
         return None
+    ctx = d.get("context") or {}
+    sev = _strip_enum(d.get("severityLevel"), "SEVERITY_LEVEL_")
+    if sev in (None, "UNSPECIFIED"):
+        sev = None
     return {
         "external_id": str(ext),
         "source": "eset",
-        "device_uuid": dev.get("uuid"),
-        "device_name": dev.get("displayName"),
-        "severity": d.get("severityLevel"),
-        "severity_score": d.get("severityScore"),
-        "threat": d.get("displayName") or d.get("typeName"),
+        "device_uuid": ctx.get("deviceUuid"),
+        "device_name": None,                       # v1 liefert keinen Gerätenamen (Auflösung per UUID)
+        "severity": sev,
+        "severity_score": None,
+        "threat": d.get("displayName") or d.get("objectName") or d.get("typeName"),
         "type_name": d.get("typeName"),
-        "category": d.get("category"),
+        "category": _strip_enum(d.get("category"), "DETECTION_CATEGORY_"),
         "resolved": bool(d.get("resolved", False)),
         "occurred_at": d.get("occurTime"),
-        "user_name": d.get("userName"),
+        "user_name": ctx.get("userName"),
     }
 
 
