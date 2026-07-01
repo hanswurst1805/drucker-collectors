@@ -1,5 +1,7 @@
 [eset]
-# Region des ESET-Tenants: eu, de, us, ca, jpn
+# Datenregion deiner ESET-PROTECT-Cloud-Instanz: eu, de, us, ca, jpn
+# WICHTIG: Der Login klappt regionsübergreifend, die Geräte liegen aber nur in
+# der Region deiner Instanz. Unsicher? -> `python3 eset_check.py` findet sie.
 region = eu
 
 # Dedizierter API-User (NICHT die normalen Konsolen-Zugangsdaten!)

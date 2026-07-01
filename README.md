@@ -115,6 +115,15 @@ python3 eset_collector.py --dry-run
 Benötigt einen dedizierten **API-User** (nicht die normalen Login-Daten),
 siehe: https://help.eset.com/eset_connect/en-US/create_api_user_account.html
 
+**Verbindung testen:** `eset_check.py` prüft Login und API-Zugriff getrennt und
+zeigt, wo es klemmt (Zugangsdaten, Berechtigung oder Region). Zugangsdaten per
+Umgebungsvariablen oder aus `eset_collector.conf`:
+```bash
+ESET_REGION=de ESET_USER='api@…' ESET_PASS='…' python3 eset_check.py
+```
+Tipp: Der Login klappt regionsübergreifend – die Geräte liegen aber nur in der
+Region deiner Instanz. Liefert der API-Zugriff überall `404`, ist es die Region.
+
 ### Jumpbox – aufgezeichnete SSH-Sessions
 
 `na_jump.py` (Jumpbox) zeichnet SSH-Sessions zu Zielhosts auf und lädt sie an
