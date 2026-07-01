@@ -375,7 +375,7 @@ def push_alerts(config: dict, alerts: list[dict], dry_run: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="NetAsset ESET PROTECT Cloud Collector")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--dump-raw", action="store_true", help="Rohdaten des ersten Geräts ausgeben")
+    parser.add_argument("--dump-raw", action="store_true", help="Rohdaten ALLER Geräte als JSON ausgeben")
     parser.add_argument("--no-alerts", action="store_true", help="Detections/Alarme nicht abrufen")
     parser.add_argument("--alert-days", type=int, default=30, help="Alarme der letzten N Tage (Default 30)")
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -398,7 +398,8 @@ def main():
     devices = fetch_devices(config, token)
 
     if args.dump_raw:
-        print(json.dumps(devices[0] if devices else {}, indent=2))
+        print(json.dumps(devices, indent=2, ensure_ascii=False))
+        log.info("%d Geräte ausgegeben", len(devices))
         return
 
     assets = [a for a in (map_device(d, config) for d in devices) if a]
