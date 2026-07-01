@@ -218,7 +218,9 @@ def map_device(d: dict, config: dict) -> dict | None:
     os_type = (os_info.get("type") or os_info.get("platform") or "").lower()
     asset_type = "server" if "server" in os_type else "client"
 
-    status = (d.get("functionalityStatus") or "unknown").lower().replace("_", "-")
+    # Enum entpräfixen: DEVICE_FUNCTIONALITY_STATUS_OK -> ok, ATTENTION_REQUIRED -> attention-required
+    status = _strip_enum(d.get("functionalityStatus"), "DEVICE_FUNCTIONALITY_STATUS_")
+    status = (status or "unknown").lower().replace("_", "-")
 
     return {
         "hostname": hostname,
