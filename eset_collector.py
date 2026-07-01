@@ -174,6 +174,28 @@ def fetch_devices(config: dict, token: str) -> list[dict]:
 # Mapping ESET -> NetAsset Asset
 # ---------------------------------------------------------------------------
 
+def _as_str(v):
+    """Nur echte Strings zurückgeben (ESET liefert manche Felder als Objekt)."""
+    return v if isinstance(v, str) and v.strip() else None
+
+
+def _os_version(v) -> str | None:
+    """
+    ESET liefert operatingSystem.version teils als Objekt
+    ({name, major, minor, patch}) statt als String → in String umwandeln.
+    """
+    if isinstance(v, str):
+        return v.strip() or None
+    if isinstance(v, dict):
+        name = (v.get("name") or "").strip()
+        if name:
+            return name
+        parts = [str(v.get(k, 0)) for k in ("major", "minor", "patch")]
+        joined = ".".join(parts)
+        return joined if joined != "0.0.0" else None
+    return None
+
+
 def map_device(d: dict, config: dict) -> dict | None:
     hostname = d.get("displayName") or d.get("originalDisplayName")
     if not hostname:
@@ -204,10 +226,10 @@ def map_device(d: dict, config: dict) -> dict | None:
         "serial_number": serial,
         "chassis_id": d.get("uuid"),
         "asset_type": asset_type,
-        "os_name": os_info.get("name") or os_info.get("platform"),
-        "os_version": os_info.get("version"),
-        "manufacturer": hw.get("manufacturer"),
-        "model": hw.get("model"),
+        "os_name": _as_str(os_info.get("name")) or _as_str(os_info.get("platform")),
+        "os_version": _os_version(os_info.get("version")),
+        "manufacturer": _as_str(hw.get("manufacturer")),
+        "model": _as_str(hw.get("model")),
         "exposure_level": config["exposure_level"],
         "tags": config["tags"] + [f"eset-status-{status}"],
         "source": "eset-collector",
