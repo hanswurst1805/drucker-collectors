@@ -12,6 +12,7 @@ Agenten für [DRUCKER Infrastructure Intelligence](https://github.com/hanswurst1
 | `network_discovery_agent.py` | Netzwerk-Scan | nmap |
 | `lynis_collector.py` | Linux Sicherheits-Audit | Lynis |
 | `eset_collector.py` | ESET PROTECT Cloud (verwaltete Endpoints) | ESET Connect API |
+| `eset_syslog.py` | ESET-Detections → Syslog/SIEM | ESET Connect API → Syslog |
 | `na_jump.py` | Jumpbox (Bastion) | Aufgezeichnete SSH-Session zu Zielhosts |
 
 ---
@@ -123,6 +124,25 @@ ESET_REGION=de ESET_USER='api@…' ESET_PASS='…' python3 eset_check.py
 ```
 Tipp: Der Login klappt regionsübergreifend – die Geräte liegen aber nur in der
 Region deiner Instanz. Liefert der API-Zugriff überall `404`, ist es die Region.
+
+#### ESET-Detections → Syslog/SIEM (`eset_syslog.py`)
+
+Zieht ESET-Endpoint-Detections per API und schickt jedes Ereignis als
+**Syslog**-Nachricht an einen Syslog-/SIEM-Server – unabhängig vom eingebauten
+ESET-PROTECT-Syslog-Export. Inkrementell (State-Datei, kein Doppelversand),
+Ausgabe als **RFC5424** oder **CEF**.
+
+```bash
+cp eset_syslog.conf.example /etc/netasset/eset_syslog.conf
+nano /etc/netasset/eset_syslog.conf   # region, API-User, [syslog] host/port/format
+
+python3 eset_syslog.py --dry-run      # Nachrichten nur anzeigen
+python3 eset_syslog.py                 # an den Syslog-Server senden
+```
+
+Regelmäßig per Cron/systemd-Timer ausführen (z. B. alle 5 Minuten). Zugangsdaten
+und Ziel können alternativ über Env kommen (`ESET_REGION/ESET_USER/ESET_PASS`,
+`SYSLOG_HOST/SYSLOG_PORT`).
 
 ### Jumpbox – aufgezeichnete SSH-Sessions
 

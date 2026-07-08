@@ -1,0 +1,26 @@
+[eset]
+# Datenregion deiner ESET-PROTECT-Cloud-Instanz: eu, de, us, ca, jpn
+# (Login klappt regionsübergreifend, Daten liegen in der Instanz-Region.
+#  Unsicher? -> python3 eset_check.py)
+region = de
+
+# Dedizierter API-User (NICHT die normalen Konsolen-Zugangsdaten!)
+username =
+password =
+timeout = 30
+
+[syslog]
+# Ziel-Syslog-/SIEM-Server
+host = 10.0.0.10
+port = 514
+protocol = udp            # udp oder tcp
+format = rfc5424          # rfc5424 (Standard) oder cef (für SIEM)
+facility = local0         # kern/user/daemon/auth/syslog/local0..local7
+app_name = ESET
+# hostname =              # Absender-Host im Syslog-Header (Default: lokaler Hostname)
+
+[state]
+# Merkt letzten Zeitpunkt + gesendete IDs (kein Doppelversand bei Wiederholung)
+file = /var/lib/netasset/eset_syslog.state.json
+# Startfenster beim allerersten Lauf (Tage)
+lookback_days = 1
