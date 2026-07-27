@@ -58,9 +58,11 @@ def _section_to_config(s: dict, na: dict) -> dict:
     return {
         "username":        os.environ.get("MIKROTIK_USER", s.get("username", "admin")),
         "password":        os.environ.get("MIKROTIK_PASS", s.get("password", "")),
-        "use_https":       s.get("use_https", "false").lower() == "true",
+        # Standard bewusst TLS (wie mikrotik_collector.py). Wer HTTP braucht,
+        # setzt use_https = false / port_rest = 80 explizit in der Config.
+        "use_https":       s.get("use_https", "true").lower() == "true",
         "verify_ssl":      s.get("verify_ssl", "false").lower() == "true",
-        "port_rest":       int(s.get("port_rest", "80")),
+        "port_rest":       int(s.get("port_rest", "443")),
         "mode":            s.get("mode", "rest"),           # rest | snmp
         "snmp_community":  s.get("snmp_community", "public"),
         "snmp_port":       int(s.get("snmp_port", "161")),
@@ -145,9 +147,29 @@ def load_configs(config_files: list[str] | None = None) -> list[dict]:
 # REST-API Client
 # ---------------------------------------------------------------------------
 
+def warn_insecure_transport(host: str, use_https: bool, verify_ssl: bool) -> None:
+    """Weist darauf hin, wenn Switch-Zugangsdaten ungeschützt übertragen werden.
+
+    Die REST-API nutzt HTTP Basic Auth: Ohne TLS gehen Benutzername und
+    Passwort praktisch im Klartext (nur base64) über das Netz, mit TLS ohne
+    Zertifikatsprüfung sind sie per MITM abgreifbar.
+    """
+    if not use_https:
+        log.warning(
+            "%s: HTTP ohne TLS – die Switch-Zugangsdaten gehen im Klartext über das Netz. "
+            "Empfohlen: use_https = true, port_rest = 443", host,
+        )
+    elif not verify_ssl:
+        log.warning(
+            "%s: TLS ohne Zertifikatsprüfung (verify_ssl = false) – anfällig für "
+            "Man-in-the-Middle. Bei eigener CA/gültigem Zertifikat verify_ssl = true setzen.",
+            host,
+        )
+
+
 class SwitchREST:
     def __init__(self, host: str, username: str, password: str,
-                 use_https: bool = False, port: int = 80, verify_ssl: bool = False):
+                 use_https: bool = True, port: int = 443, verify_ssl: bool = False):
         self._host = host
         self._port = port
         creds = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -161,6 +183,7 @@ class SwitchREST:
             if not verify_ssl:
                 self._ssl_ctx.check_hostname = False
                 self._ssl_ctx.verify_mode    = ssl.CERT_NONE
+        warn_insecure_transport(host, use_https, verify_ssl)
 
     def get(self, path: str) -> list[dict]:
         url_path = "/rest" + path

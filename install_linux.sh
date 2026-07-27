@@ -47,17 +47,24 @@ fi
 # 3. Collector ausführbar machen, Config-Verzeichnis anlegen
 echo "==> Verwende Collector aus $INSTALL_DIR"
 mkdir -p "$CONF_DIR"
+# Configs enthalten den NetAsset-API-Key (und je nach Collector Geräte-
+# Passwörter) – nur root darf sie lesen.
+chmod 700 "$CONF_DIR"
 chmod +x "$INSTALL_DIR/netasset_collector.py"
 
 # 4. Konfiguration anlegen (wenn noch nicht vorhanden)
 if [ ! -f "$CONF_DIR/netasset_collector.conf" ]; then
     cp "$SCRIPT_DIR/netasset_collector.conf.example" "$CONF_DIR/netasset_collector.conf"
+    chmod 600 "$CONF_DIR/netasset_collector.conf"
     echo ""
     echo "  WICHTIG: Konfiguration anpassen:"
     echo "  nano $CONF_DIR/netasset_collector.conf"
     echo "  → api_key eintragen (aus NetAsset → Einstellungen → API Keys)"
     echo ""
 fi
+
+# Auch bereits vorhandene Configs nachziehen (idempotent, für Bestandsinstallationen)
+chmod 600 "$CONF_DIR"/*.conf 2>/dev/null || true
 
 # 5. Cron-Job einrichten (stündlich)
 cat > "$CRON_FILE" << EOF
