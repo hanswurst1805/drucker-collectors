@@ -43,8 +43,12 @@ mode = rest
 # ── REST API – nur bei mode=rest relevant ─────────────────────────────────────
 username   = admin
 password   = DEIN_PASSWORT
-use_https  = false
-port_rest  = 80
+# HTTPS empfohlen: die REST-API nutzt Basic Auth, ohne TLS gehen die
+# Zugangsdaten im Klartext über das Netz.
+use_https  = true
+port_rest  = 443
+# false akzeptiert das selbstsignierte RouterOS-Zertifikat (MITM möglich).
+# Mit eigener CA / gültigem Zertifikat auf true setzen.
 verify_ssl = false
 
 # ── SNMP – nur bei mode=snmp relevant ────────────────────────────────────────

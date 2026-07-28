@@ -24,6 +24,8 @@ import configparser
 import getpass
 import json
 import os
+import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -35,6 +37,10 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Erlaubte Zielsyntax: [user@]host – bewusst eng, da das Ziel in die von
+# `script -c` ausgeführte Shell-Zeile wandert.
+TARGET_RE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9._-]+$")
 
 CONF_PATHS = [
     Path(__file__).parent / "na_jump.conf",
@@ -69,10 +75,16 @@ def resolve_target(argv: list[str], config: dict) -> str:
         target = orig.split()[0] if orig else ""
     if not target:
         sys.exit("Kein Ziel angegeben. Aufruf: na-jump <host|user@host>")
+    # Erst Syntax prüfen: alles mit Shell-Metazeichen ($ ` ; | & ...) fliegt
+    # hier raus, bevor es in die Kommandozeile von `script -c` gelangt.
+    if not TARGET_RE.match(target):
+        sys.exit(f"Ungültiges Ziel '{target}'. Erlaubt: [user@]host (A-Z a-z 0-9 . _ -)")
     if config["allow_targets"]:
+        # Gegen das VOLLSTÄNDIGE Ziel prüfen, nicht nur gegen den Host-Teil –
+        # sonst umgeht 'beliebig@erlaubter-host' die Freigabe.
         host = target.split("@")[-1]
-        if host not in config["allow_targets"]:
-            sys.exit(f"Ziel '{host}' nicht in allow_targets erlaubt.")
+        if target not in config["allow_targets"] and host not in config["allow_targets"]:
+            sys.exit(f"Ziel '{target}' nicht in allow_targets erlaubt.")
     return target
 
 
@@ -91,7 +103,9 @@ def record_session(target: str, session_uuid: str, config: dict) -> tuple[str, s
     ssh_cmd = ["ssh", "-o", f"SetEnv=NA_SESSION_ID={session_uuid}"]
     ssh_cmd += config["ssh_options"]
     ssh_cmd += [target]
-    ssh_str = " ".join(ssh_cmd)
+    # `script -c` führt diesen String über eine Shell aus – daher zwingend
+    # quoten (target ist zusätzlich per TARGET_RE validiert).
+    ssh_str = " ".join(shlex.quote(part) for part in ssh_cmd)
 
     # script-Aufruf möglichst kompatibel: neue util-linux nutzt --log-out/--log-timing,
     # ältere nur Positional + --timing. Fallback: nur Typescript ohne Timing.

@@ -58,6 +58,14 @@ if (-not (Test-Path $ConfFile)) {
     Write-Host ""
 }
 
+# The config holds the NetAsset API key. C:\ProgramData is readable by all
+# authenticated users by default, so drop inheritance and restrict the file
+# to SYSTEM + Administrators. Well-known SIDs are used so this also works on
+# non-English Windows installations.
+if (Test-Path $ConfFile) {
+    icacls $ConfFile /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+}
+
 # 5. Scheduled Task (every hour)
 Write-Host "==> Creating scheduled task..."
 $Action   = New-ScheduledTaskAction -Execute "python.exe" -Argument "$InstallDir\netasset_collector.py" -WorkingDirectory $InstallDir
