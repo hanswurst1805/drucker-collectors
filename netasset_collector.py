@@ -477,18 +477,18 @@ def collect_update_status(q) -> dict:
             """)  # Dummy — echtes apt-check via subprocess
             try:
                 import subprocess as _sp
+                # Maschinenlesbar ("<updates>;<security>" auf stderr) –
+                # unabhängig von der Systemsprache, anders als --human-readable
                 r = _sp.run(
-                    ["/usr/lib/update-notifier/apt-check", "--human-readable"],
-                    capture_output=True, text=True, timeout=10
+                    ["/usr/lib/update-notifier/apt-check"],
+                    capture_output=True, text=True, timeout=60
                 )
-                if r.returncode == 0 and r.stderr:
+                if r.returncode == 0:
                     import re as _re
-                    m = _re.search(r'(\d+) packages can be updated', r.stderr)
+                    m = _re.search(r'^(\d+);(\d+)\s*$', r.stderr.strip(), _re.M)
                     if m:
                         status["pending_updates"] = int(m.group(1))
-                    ms = _re.search(r'(\d+) of these updates are security updates', r.stderr)
-                    if ms:
-                        status["security_updates"] = int(ms.group(1))
+                        status["security_updates"] = int(m.group(2))
             except Exception:
                 pass
 
