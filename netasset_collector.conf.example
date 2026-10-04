@@ -23,3 +23,9 @@ timeout = 30
 # z.B. nur Hostname/IP) werden danach ignoriert statt automatisch gemerged.
 # Empfehlung: 0.30-0.40 (30-40%). Leer = Server-Default (0.0 = alles erlauben)
 # min_confidence = 0.35
+
+# Nur für spool_collector.py (Ablage statt Upload, Server holt per scp ab)
+# [spool]
+# dir   = /var/spool/drucker
+# keep  = 48
+# group = drucker-spool
