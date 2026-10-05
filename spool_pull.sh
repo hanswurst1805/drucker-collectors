@@ -19,8 +19,13 @@ INBOX="${SPOOL_INBOX:-/var/lib/drucker/inbox}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 mkdir -p "$INBOX"
-# Leeres Spool ist kein Fehler: scp meldet dann "No such file" – abfangen.
-if ssh -o BatchMode=yes "$SRC" "ls $REMOTE_DIR/*.json" >/dev/null 2>&1; then
+# Erst nachsehen, dann holen: Leeres Spool ist kein Fehler (scp würde dann
+# "No such file" melden), eine fehlgeschlagene Verbindung aber schon.
+if ! files=$(ssh -o BatchMode=yes "$SRC" "test -d $REMOTE_DIR && cd $REMOTE_DIR && ls -1 -- *.json 2>/dev/null; test -d $REMOTE_DIR" 2>&1); then
+    echo "$(date '+%F %T') FEHLER $SRC: ${files:-$REMOTE_DIR fehlt}" >&2
+    exit 1
+fi
+if [ -n "$files" ]; then
     scp -q -p -o BatchMode=yes "$SRC:$REMOTE_DIR/*.json" "$INBOX/"
 else
     echo "$(date '+%F %T') $SRC: keine Spool-Dateien"
