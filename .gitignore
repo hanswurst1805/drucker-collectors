@@ -1,0 +1,3 @@
+# Echte Konfigurationen enthalten API-Keys und Passwörter
+*.conf
+__pycache__/
