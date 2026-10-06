@@ -740,6 +740,12 @@ def api_post(url: str, api_key: str, data, timeout: int = 30):
         return json.loads(resp.read())
 
 
+# Quellnamen exakt wie im NetAsset-Server (SOURCE_PRIORITY / ENRICHMENT_SOURCES).
+# Unbekannte Namen gelten dort nicht als Enrichment und legen neue Assets an –
+# bei WLAN-Clients mit zufälliger MAC entsteht so laufend Datenmüll.
+NEIGHBOR_SOURCES = {"arp": "mikrotik-arp", "wlan": "wlan", "lldp": "lldp"}
+
+
 def _build_neighbor_device(n: dict, config: dict, mikrotik_ip: str | None) -> dict | None:
     """Wandelt einen Nachbar-Eintrag in ein NetAsset Discovery-Device um."""
     ip  = n.get("ip")
@@ -786,7 +792,7 @@ def _build_neighbor_device(n: dict, config: dict, mikrotik_ip: str | None) -> di
         "asset_type":     asset_type,
         "exposure_level": config["exposure_level"],
         "tags":           tags,
-        "source":         f"mikrotik-{source_type}",
+        "source":         NEIGHBOR_SOURCES.get(source_type, "mikrotik-arp"),
     }
     if notes_parts:
         device["notes"] = "\n".join(notes_parts)
@@ -843,7 +849,7 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
             print(f"  {src}: {cnt}")
         print()
         # Aufgeschlüsselt nach Quelle anzeigen
-        for src_filter in ("mikrotik-wlan", "mikrotik-arp", "mikrotik-lldp", "mikrotik-bridge"):
+        for src_filter in ("wlan", "mikrotik-arp", "lldp"):
             group = [nd for nd in neighbor_devices if nd.get("source") == src_filter]
             if not group:
                 continue
