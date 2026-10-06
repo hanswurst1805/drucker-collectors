@@ -460,7 +460,8 @@ def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
 def _find_primary_ip(addresses: list, interfaces: list) -> tuple[str | None, str | None]:
     """Findet die primäre IP + MAC (erste aktive, nicht-loopback Adresse)."""
     for addr in addresses:
-        if addr.get("disabled") or not addr.get("address"):
+        # REST liefert Booleans als String ("false" wäre sonst truthy)
+        if addr.get("disabled") in ("true", True) or not addr.get("address"):
             continue
         ip = addr["address"].split("/")[0]
         iface_name = addr.get("interface", "")
@@ -479,7 +480,7 @@ def _extern_ports_from_firewall(fw_rules: list[dict]) -> set[int]:
     for rule in fw_rules:
         if (rule.get("chain") == "input"
                 and rule.get("action") == "accept"
-                and not rule.get("disabled")
+                and rule.get("disabled") not in ("true", True)
                 and rule.get("dst-port")):
             for p in str(rule["dst-port"]).split(","):
                 p = p.strip()
