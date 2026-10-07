@@ -963,7 +963,8 @@ def push(config: dict, data: dict, dry_run: bool = False):
     # Switch-Asset aufbauen
     device["asset_type"]     = "switch"
     device["exposure_level"] = config["exposure_level"]
-    device["source"]         = "mikrotik-switch-collector"
+    # Quellname muss im Server bekannt sein (SOURCE_PRIORITY), sonst Prio 0
+    device["source"]         = "mikrotik-collector"
 
     tags = list(config["tags"])
     if vlan_ids:
@@ -1014,7 +1015,8 @@ def push(config: dict, data: dict, dry_run: bool = False):
             "asset_type":     "server",
             "exposure_level": config["exposure_level"],
             "tags":           ["fdb-discovered", "via-switch", f"via-{device.get('hostname', 'switch')}"],
-            "source":         "mikrotik-fdb",
+            # Enrichment-Quelle: unbekannte MACs werden nicht als neue Assets angelegt
+            "source":         "mikrotik-arp",
             **({"notes": notes} if notes else {}),
         })
 
