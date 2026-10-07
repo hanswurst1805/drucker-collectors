@@ -407,7 +407,7 @@ async def _snmp_collect_v7(host: str, community: str, port: int, mp_model: int,
                     snmp_errors += 1
                     continue
                 for vb in varBinds:
-                    val = str(vb[1]).strip().strip('"')
+                    val = _snmp_text(vb[1]).strip().strip('"')
                     log.debug("SNMP GET %s = %r", oid, val)
                     get_results[oid] = val
             except Exception as e:
@@ -538,6 +538,18 @@ def _snmp_walk(host: str, community: str, oid: str, port: int = 161, version: st
     return walk_results.get(oid, [])
 
 
+def _snmp_text(val) -> str:
+    """SNMP-Wert als Text. OctetStrings als UTF-8 (SwOS-Portnamen mit Umlauten),
+    str() von pysnmp würde sie als Latin-1 zeigen ("bÃ¼ro")."""
+    if hasattr(val, "asOctets"):
+        raw = val.asOctets()
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1")
+    return str(val)
+
+
 def _mac_from_snmp(val) -> str | None:
     """Normalisiert einen pysnmp-OctetString-Wert oder String auf aa:bb:cc:dd:ee:ff."""
     # pysnmp OctetString: Zugriff auf Raw-Bytes über asNumbers() oder asOctets()
@@ -580,7 +592,7 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
 
     def ws(oid: str) -> dict[str, str]:
         """Walk-Ergebnis als {oid_str: str}."""
-        return {k: str(v) for k, v in walk_r.get(oid, [])}
+        return {k: _snmp_text(v) for k, v in walk_r.get(oid, [])}
 
     def wr(oid: str) -> dict[str, object]:
         """Walk-Ergebnis als {oid_str: raw} – für MAC-OIDs."""
@@ -592,8 +604,15 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
     sys_uptime = get_r.get(OID_SYS_UPTIME,"")
 
     # RouterOS-Version aus sysDescr extrahieren
-    os_version = ""
-    if "RouterOS" in sys_descr:
+    os_name, os_version, model = "RouterOS", "", None
+    parts = sys_descr.split()
+    if "SwOS" in parts:
+        os_name = "SwOS"
+        i = parts.index("SwOS")
+        model = parts[i - 1] if i > 0 else None
+        if i + 1 < len(parts):
+            os_version = parts[i + 1].lstrip("vV")
+    elif "RouterOS" in sys_descr:
         parts = sys_descr.split()
         for i, part in enumerate(parts):
             if part == "RouterOS" and i + 1 < len(parts):
@@ -614,6 +633,7 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
     iface_by_idx: dict[str, dict] = {}
     port_table: list[dict] = []
     primary_mac: str | None = None
+    first_mac: tuple[int, str] | None = None   # (ifIndex, MAC) – Fallback für SwOS
 
     for oid_key, descr in if_descr.items():
         idx = oid_key.split(".")[-1]
@@ -636,6 +656,8 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
 
         if mac and not primary_mac and descr.lower() in ("bridge", "vlan1", "ether1", "lo0"):
             primary_mac = mac
+        if mac and idx.isdigit() and (first_mac is None or int(idx) < first_mac[0]):
+            first_mac = (int(idx), mac)
 
         port_table.append({
             "name":         descr,
@@ -653,6 +675,9 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
     port_table.sort(key=lambda p: p["name"])
 
     # ── IP-Adressen ───────────────────────────────────────────────────────────
+    if primary_mac is None and first_mac:
+        primary_mac = first_mac[1]
+
     primary_ip: str | None = None
     for oid_key, ip in ws(OID_IP_ADDR).items():
         if ip and not ip.startswith("127."):
@@ -731,8 +756,8 @@ def collect_snmp(host: str, community: str = "public", port: int = 161, version:
             "ip_address":      primary_ip or host,
             "mac_address":     primary_mac,
             "manufacturer":    "MikroTik",
-            "model":           None,
-            "os_name":         "RouterOS",
+            "model":           model,
+            "os_name":         os_name,
             "os_version":      os_version or None,
             "open_ports":      open_ports,
         },
@@ -1046,7 +1071,7 @@ def _dry_run_output(device: dict, port_table: list, vlan_ids: list, neighbors: l
     print(f"  IP:        {device.get('ip_address', '?')}")
     print(f"  MAC:       {device.get('mac_address', '?')}")
     print(f"  Model:     {device.get('model', '?')}")
-    print(f"  RouterOS:  {device.get('os_version', '?')}")
+    print(f"  OS:        {device.get('os_name') or '?'} {device.get('os_version') or '?'}")
     print(f"  Tags:      {', '.join(device.get('tags', []))}")
 
     ports = device.get("open_ports") or []
