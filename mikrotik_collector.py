@@ -275,6 +275,10 @@ class MikroTikREST:
         log.info("Verbinde per REST API...")
 
         resource    = self.get("/system/resource")
+        if not resource:
+            # Meist HTTP 401: kein User/falsches Passwort. Abbrechen statt ein
+            # leeres Asset "mikrotik" ohne IP zu melden.
+            raise RuntimeError("REST liefert keine Systemdaten – Login (User/Passwort) prüfen")
         identity    = self.get("/system/identity")
         routerboard = self.get("/system/routerboard")
         addresses   = self.get("/ip/address")
@@ -442,10 +446,14 @@ def _probe_mikrotik_ports(host: str, timeout: float = 2.0) -> list[dict]:
 
 
 def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
-    """Ermittelt ob das Gerät Router oder Switch ist."""
+    """Ermittelt ob das Gerät Router, Switch oder Access Point ist."""
     # CRS = Cloud Router Switch, CSS = Cloud Smart Switch → Switch
     if board_name.startswith(("CRS", "CSS")):
         return "switch"
+    # cAP / wAP = reine Access Points (hAP bleibt Router: Heimrouter mit WLAN).
+    # Nicht als "router" melden – die Topologie behandelt Router als Segmentgrenze.
+    if board_name.startswith(("CAP", "WAP")):
+        return "access-point"
     # RB = RouterBoard, CCR = Cloud Core Router → Router
     if board_name.startswith(("CCR", "RB4011", "RB5009", "RB1100")):
         return "router"
