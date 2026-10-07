@@ -300,7 +300,7 @@ class MikroTikREST:
         log.info("Erkannter Gerätetyp: %s (Board: %s)", asset_type, board_name)
 
         # Primäre IP + MAC
-        primary_ip, primary_mac = _find_primary_ip(addresses, interfaces)
+        primary_ip, primary_mac = _find_primary_ip(addresses, interfaces, self._host)
 
         # VLAN-Info als Tags
         vlan_tags = []
@@ -465,21 +465,30 @@ def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
     return "router"
 
 
-def _find_primary_ip(addresses: list, interfaces: list) -> tuple[str | None, str | None]:
-    """Findet die primäre IP + MAC (erste aktive, nicht-loopback Adresse)."""
-    for addr in addresses:
-        # REST liefert Booleans als String ("false" wäre sonst truthy)
-        if addr.get("disabled") in ("true", True) or not addr.get("address"):
-            continue
-        ip = addr["address"].split("/")[0]
-        iface_name = addr.get("interface", "")
-        mac = None
-        for iface in interfaces:
-            if iface.get("name") == iface_name and iface.get("mac-address"):
-                mac = iface["mac-address"].lower()
-                break
-        return ip, mac
-    return None, None
+def _find_primary_ip(addresses: list, interfaces: list,
+                     preferred: str | None = None) -> tuple[str | None, str | None]:
+    """Findet die primäre IP + MAC.
+
+    Bevorzugt die Adresse, über die der Collector das Gerät erreicht hat –
+    sonst gewinnt z. B. die Werks-IP 192.168.88.1 eines hAP. Fallback: erste
+    aktive Adresse.
+    """
+    active = [a for a in addresses
+              if a.get("disabled") not in ("true", True) and a.get("address")]
+    # REST liefert Booleans als String ("false" wäre sonst truthy)
+    chosen = next((a for a in active if a["address"].split("/")[0] == preferred), None)
+    if chosen is None and active:
+        chosen = active[0]
+    if chosen is None:
+        return None, None
+    ip = chosen["address"].split("/")[0]
+    iface_name = chosen.get("interface", "")
+    mac = None
+    for iface in interfaces:
+        if iface.get("name") == iface_name and iface.get("mac-address"):
+            mac = iface["mac-address"].lower()
+            break
+    return ip, mac
 
 
 def _extern_ports_from_firewall(fw_rules: list[dict]) -> set[int]:
