@@ -14,6 +14,7 @@ Agenten für [DRUCKER Infrastructure Intelligence](https://github.com/hanswurst1
 | `eset_collector.py` | ESET PROTECT Cloud (verwaltete Endpoints) | ESET Connect API |
 | `eset_syslog.py` | ESET-Detections → Syslog/SIEM | ESET Connect API → Syslog |
 | `na_jump.py` | Jumpbox (Bastion) | Aufgezeichnete SSH-Session zu Zielhosts |
+| `spool_collector.py` | Linux / macOS (ohne Verbindung zum Server) | osquery → lokale Ablage, Server holt per scp |
 
 ---
 
@@ -94,6 +95,38 @@ cp discovery_agent.conf.example /etc/netasset/discovery.conf
 nano /etc/netasset/discovery.conf  # networks = 192.168.178.0/24
 python3 network_discovery_agent.py --dry-run
 ```
+
+### Spool-Collector (Server holt ab)
+
+Für Hosts, die den DRUCKER-Server nicht erreichen (z. B. VPS ohne von hier
+erreichbare Adresse): Der Collector lädt nicht hoch, sondern legt pro Lauf eine
+JSON-Datei ab. Der Server holt sie per scp ab und spielt sie ein. Auf dem Host
+liegt kein API-Key.
+
+**Auf dem gesammelten Host** (osquery wie beim `netasset_collector.py`):
+```bash
+sudo groupadd drucker-spool
+sudo useradd -m -G drucker-spool drucker-pull      # nur zum Abholen, SSH-Key vom Server eintragen
+# /etc/netasset/netasset_collector.conf ergänzen:
+#   [spool]
+#   dir   = /var/spool/drucker
+#   keep  = 48
+#   group = drucker-spool
+sudo python3 spool_collector.py --stdout | head   # Probelauf
+echo "0 * * * * root /usr/bin/python3 $PWD/spool_collector.py >> /var/log/drucker-spool.log 2>&1" | sudo tee /etc/cron.d/drucker-spool
+```
+
+Dateien werden atomar geschrieben (`.tmp` → umbenennen), Rechte `0640`
+für die Gruppe, ältere als die letzten `keep` Läufe werden gelöscht.
+
+**Auf dem Server** (`NETASSET_URL` + `NETASSET_API_KEY` wie beim Collector):
+```bash
+bash spool_pull.sh drucker-pull@<host>          # scp abholen + spool_import.py
+```
+
+Bereits importierte Dateien landen in `<inbox>/done/` und werden beim nächsten
+Abholen übersprungen. Bei einem API-Fehler bleibt die Datei in der Inbox und
+wird beim nächsten Lauf erneut versucht.
 
 ### Lynis Sicherheits-Audit
 ```bash

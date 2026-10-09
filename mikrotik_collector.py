@@ -275,6 +275,10 @@ class MikroTikREST:
         log.info("Verbinde per REST API...")
 
         resource    = self.get("/system/resource")
+        if not resource:
+            # Meist HTTP 401: kein User/falsches Passwort. Abbrechen statt ein
+            # leeres Asset "mikrotik" ohne IP zu melden.
+            raise RuntimeError("REST liefert keine Systemdaten – Login (User/Passwort) prüfen")
         identity    = self.get("/system/identity")
         routerboard = self.get("/system/routerboard")
         addresses   = self.get("/ip/address")
@@ -296,7 +300,7 @@ class MikroTikREST:
         log.info("Erkannter Gerätetyp: %s (Board: %s)", asset_type, board_name)
 
         # Primäre IP + MAC
-        primary_ip, primary_mac = _find_primary_ip(addresses, interfaces)
+        primary_ip, primary_mac = _find_primary_ip(addresses, interfaces, self._host)
 
         # VLAN-Info als Tags
         vlan_tags = []
@@ -442,10 +446,14 @@ def _probe_mikrotik_ports(host: str, timeout: float = 2.0) -> list[dict]:
 
 
 def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
-    """Ermittelt ob das Gerät Router oder Switch ist."""
+    """Ermittelt ob das Gerät Router, Switch oder Access Point ist."""
     # CRS = Cloud Router Switch, CSS = Cloud Smart Switch → Switch
     if board_name.startswith(("CRS", "CSS")):
         return "switch"
+    # cAP / wAP = reine Access Points (hAP bleibt Router: Heimrouter mit WLAN).
+    # Nicht als "router" melden – die Topologie behandelt Router als Segmentgrenze.
+    if board_name.startswith(("CAP", "WAP")):
+        return "access-point"
     # RB = RouterBoard, CCR = Cloud Core Router → Router
     if board_name.startswith(("CCR", "RB4011", "RB5009", "RB1100")):
         return "router"
@@ -457,20 +465,30 @@ def _detect_asset_type(board_name: str, bridges: list, interfaces: list) -> str:
     return "router"
 
 
-def _find_primary_ip(addresses: list, interfaces: list) -> tuple[str | None, str | None]:
-    """Findet die primäre IP + MAC (erste aktive, nicht-loopback Adresse)."""
-    for addr in addresses:
-        if addr.get("disabled") or not addr.get("address"):
-            continue
-        ip = addr["address"].split("/")[0]
-        iface_name = addr.get("interface", "")
-        mac = None
-        for iface in interfaces:
-            if iface.get("name") == iface_name and iface.get("mac-address"):
-                mac = iface["mac-address"].lower()
-                break
-        return ip, mac
-    return None, None
+def _find_primary_ip(addresses: list, interfaces: list,
+                     preferred: str | None = None) -> tuple[str | None, str | None]:
+    """Findet die primäre IP + MAC.
+
+    Bevorzugt die Adresse, über die der Collector das Gerät erreicht hat –
+    sonst gewinnt z. B. die Werks-IP 192.168.88.1 eines hAP. Fallback: erste
+    aktive Adresse.
+    """
+    active = [a for a in addresses
+              if a.get("disabled") not in ("true", True) and a.get("address")]
+    # REST liefert Booleans als String ("false" wäre sonst truthy)
+    chosen = next((a for a in active if a["address"].split("/")[0] == preferred), None)
+    if chosen is None and active:
+        chosen = active[0]
+    if chosen is None:
+        return None, None
+    ip = chosen["address"].split("/")[0]
+    iface_name = chosen.get("interface", "")
+    mac = None
+    for iface in interfaces:
+        if iface.get("name") == iface_name and iface.get("mac-address"):
+            mac = iface["mac-address"].lower()
+            break
+    return ip, mac
 
 
 def _extern_ports_from_firewall(fw_rules: list[dict]) -> set[int]:
@@ -479,7 +497,7 @@ def _extern_ports_from_firewall(fw_rules: list[dict]) -> set[int]:
     for rule in fw_rules:
         if (rule.get("chain") == "input"
                 and rule.get("action") == "accept"
-                and not rule.get("disabled")
+                and rule.get("disabled") not in ("true", True)
                 and rule.get("dst-port")):
             for p in str(rule["dst-port"]).split(","):
                 p = p.strip()
@@ -739,6 +757,12 @@ def api_post(url: str, api_key: str, data, timeout: int = 30):
         return json.loads(resp.read())
 
 
+# Quellnamen exakt wie im NetAsset-Server (SOURCE_PRIORITY / ENRICHMENT_SOURCES).
+# Unbekannte Namen gelten dort nicht als Enrichment und legen neue Assets an –
+# bei WLAN-Clients mit zufälliger MAC entsteht so laufend Datenmüll.
+NEIGHBOR_SOURCES = {"arp": "mikrotik-arp", "wlan": "wlan", "lldp": "lldp"}
+
+
 def _build_neighbor_device(n: dict, config: dict, mikrotik_ip: str | None) -> dict | None:
     """Wandelt einen Nachbar-Eintrag in ein NetAsset Discovery-Device um."""
     ip  = n.get("ip")
@@ -785,7 +809,7 @@ def _build_neighbor_device(n: dict, config: dict, mikrotik_ip: str | None) -> di
         "asset_type":     asset_type,
         "exposure_level": config["exposure_level"],
         "tags":           tags,
-        "source":         f"mikrotik-{source_type}",
+        "source":         NEIGHBOR_SOURCES.get(source_type, "mikrotik-arp"),
     }
     if notes_parts:
         device["notes"] = "\n".join(notes_parts)
@@ -842,7 +866,7 @@ def push(config: dict, data: dict, push_neighbors: bool = True, dry_run: bool = 
             print(f"  {src}: {cnt}")
         print()
         # Aufgeschlüsselt nach Quelle anzeigen
-        for src_filter in ("mikrotik-wlan", "mikrotik-arp", "mikrotik-lldp", "mikrotik-bridge"):
+        for src_filter in ("wlan", "mikrotik-arp", "lldp"):
             group = [nd for nd in neighbor_devices if nd.get("source") == src_filter]
             if not group:
                 continue

@@ -477,18 +477,18 @@ def collect_update_status(q) -> dict:
             """)  # Dummy — echtes apt-check via subprocess
             try:
                 import subprocess as _sp
+                # Maschinenlesbar ("<updates>;<security>" auf stderr) –
+                # unabhängig von der Systemsprache, anders als --human-readable
                 r = _sp.run(
-                    ["/usr/lib/update-notifier/apt-check", "--human-readable"],
-                    capture_output=True, text=True, timeout=10
+                    ["/usr/lib/update-notifier/apt-check"],
+                    capture_output=True, text=True, timeout=60
                 )
-                if r.returncode == 0 and r.stderr:
+                if r.returncode == 0:
                     import re as _re
-                    m = _re.search(r'(\d+) packages can be updated', r.stderr)
+                    m = _re.search(r'^(\d+);(\d+)\s*$', r.stderr.strip(), _re.M)
                     if m:
                         status["pending_updates"] = int(m.group(1))
-                    ms = _re.search(r'(\d+) of these updates are security updates', r.stderr)
-                    if ms:
-                        status["security_updates"] = int(ms.group(1))
+                        status["security_updates"] = int(m.group(2))
             except Exception:
                 pass
 
@@ -668,29 +668,21 @@ def push_sbom(config: dict, asset_id: str, packages: list[dict]) -> None:
 # Hauptfunktion
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="NetAsset osquery Collector")
-    parser.add_argument("--dry-run", action="store_true", help="Nur sammeln, nicht hochladen")
-    parser.add_argument("--no-sbom", action="store_true", help="SBOM-Upload überspringen")
-    parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
-
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-
-    config = load_config()
-
-    if not config["api_key"] and not args.dry_run:
-        log.error("NETASSET_API_KEY nicht gesetzt. Bitte in netasset_collector.conf eintragen.")
-        sys.exit(1)
-
-    # osquery finden
+def require_osquery(config: dict) -> str:
+    """osquery-Binary finden oder mit Fehlermeldung abbrechen."""
     osquery_bin = config.get("osquery_bin") or find_osquery()
     if not osquery_bin:
         log.error("osquery nicht gefunden. Bitte installieren: https://osquery.io")
         sys.exit(1)
     log.info("osquery: %s", osquery_bin)
+    return osquery_bin
 
+
+def collect(config: dict, osquery_bin: str) -> tuple[dict, list[dict]]:
+    """Sammelt Asset-Daten und SBOM. Gibt (device, packages) zurück.
+
+    Wird auch von spool_collector.py genutzt (Ablage statt Upload).
+    """
     # Query-Wrapper
     def q(sql: str) -> list[dict]:
         return osquery(sql, osquery_bin)
@@ -778,6 +770,27 @@ def main():
         " [REBOOT]" if reboot else "",
         vm_info,
     )
+    return device, packages
+
+
+def main():
+    parser = argparse.ArgumentParser(description="NetAsset osquery Collector")
+    parser.add_argument("--dry-run", action="store_true", help="Nur sammeln, nicht hochladen")
+    parser.add_argument("--no-sbom", action="store_true", help="SBOM-Upload überspringen")
+    parser.add_argument("--verbose", "-v", action="store_true")
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    config = load_config()
+
+    if not config["api_key"] and not args.dry_run:
+        log.error("NETASSET_API_KEY nicht gesetzt. Bitte in netasset_collector.conf eintragen.")
+        sys.exit(1)
+
+    osquery_bin = require_osquery(config)
+    device, packages = collect(config, osquery_bin)
 
     if args.dry_run:
         print("\n=== DRY RUN – wird NICHT hochgeladen ===\n")
