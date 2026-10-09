@@ -73,7 +73,7 @@ def load_config(config_file: str | None = None) -> dict:
 
     s = cfg["netasset"] if "netasset" in cfg else {}
     return {
-        "api_url":  os.environ.get("NETASSET_URL", s.get("api_url", "https://ocs.kiste.org")),
+        "api_url":  os.environ.get("NETASSET_URL", s.get("api_url", "https://netasset.example.com")),
         "api_key":  os.environ.get("NETASSET_API_KEY", s.get("api_key", "")),
         "asset_id": os.environ.get("NETASSET_ASSET_ID", s.get("asset_id", "")),
         "timeout":  int(s.get("timeout", "30")),

@@ -80,7 +80,7 @@ def load_config() -> dict:
         "region": region,
         "username": os.environ.get("ESET_USER", es.get("username", "")),
         "password": os.environ.get("ESET_PASS", es.get("password", "")),
-        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")),
+        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://netasset.example.com")),
         "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
         "exposure_level": na.get("exposure_level", "INTERN"),
         "tags": [t.strip() for t in na.get("tags", "eset,managed-endpoint").split(",")],

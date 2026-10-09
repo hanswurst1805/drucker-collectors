@@ -77,7 +77,7 @@ def load_config() -> dict:
         "username": os.environ.get("FRITZ_USER", fb.get("username", "")),
         "password": os.environ.get("FRITZ_PASS", fb.get("password", "")),
         "use_tls": fb.get("use_tls", "false").lower() == "true",
-        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")),
+        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://netasset.example.com")),
         "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
         "exposure_level": na.get("exposure_level", "INTERN"),
         "tags": [t.strip() for t in na.get("tags", "fritzbox,avm").split(",")],

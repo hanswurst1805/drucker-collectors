@@ -67,7 +67,7 @@ def _section_to_config(s: dict, na: dict) -> dict:
         "snmp_community":  s.get("snmp_community", "public"),
         "snmp_port":       int(s.get("snmp_port", "161")),
         "snmp_version":    s.get("snmp_version", "2c"),     # 1 | 2c
-        "api_url":         os.environ.get("NETASSET_URL",     na.get("api_url",  "https://ocs.kiste.org")),
+        "api_url":         os.environ.get("NETASSET_URL",     na.get("api_url",  "https://netasset.example.com")),
         "api_key":         os.environ.get("NETASSET_API_KEY", na.get("api_key",  "")),
         "exposure_level":  na.get("exposure_level", "INTERN"),
         "tags":            [t.strip() for t in na.get("tags", "mikrotik,switch").split(",")],

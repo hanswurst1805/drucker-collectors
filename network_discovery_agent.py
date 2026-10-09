@@ -3,7 +3,7 @@
 NetAsset Network Discovery Agent
 
 Scannt das Netzwerk per nmap, erkennt neue Systeme automatisch
-und meldet sie an die NetAsset API (ocs.kiste.org).
+und meldet sie an die NetAsset API (z. B. netasset.example.com).
 
 Features:
   - CIDR-Ranges konfigurierbar (mehrere möglich)
@@ -61,7 +61,7 @@ CONF_PATHS = [
 ]
 
 DEFAULTS = {
-    "api_url": "https://ocs.kiste.org",
+    "api_url": "https://netasset.example.com",
     "api_key": "",
     "networks": "192.168.0.0/24",       # Kommagetrennte CIDR-Ranges
     "exclude_hosts": "",                 # IPs die nicht gescannt werden

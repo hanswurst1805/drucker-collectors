@@ -60,7 +60,7 @@ snmp_community = meine_community
 
 # ── NetAsset-Verbindung ───────────────────────────────────────────────────────
 [netasset]
-api_url        = https://ocs.kiste.org
+api_url        = https://netasset.example.com
 api_key        = sk-na-DEIN_KEY_HIER
 exposure_level = INTERN
 tags           = mikrotik,netzwerk
