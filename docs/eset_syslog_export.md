@@ -38,7 +38,7 @@ Dann folgende Felder ausfüllen:
 | **Payload format** | Format der Nutzdaten | `JSON` (am einfachsten zu parsen), alternativ `LEEF` (QRadar) oder `CEF` |
 | **Log envelope format** | Rahmenformat | `Syslog (RFC 5424)` (moderner) oder `BSD (RFC 3164)` |
 | **Minimal log level** | Mindest-Schweregrad | `Information` für alles, `Warning`/`Error` zum Filtern |
-| **Destination** | IPv4 / FQDN des Empfängers | z.B. `siem.kiste.org` |
+| **Destination** | IPv4 / FQDN des Empfängers | z.B. `siem.example.com` |
 | **Port** | Ziel-Port (Drop-down) | je nach Empfänger, typ. `6514` (Syslog/TLS) bzw. `514` |
 | **Validate CA Root certificates** | TLS-Zertifikatsprüfung | aktivieren + PEM-Zertifikatskette einfügen (empfohlen) |
 
@@ -93,7 +93,7 @@ nc -lk 514
 ```bash
 # Selbstsigniertes Zertifikat (nur zum Test)
 openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout syslog-test.key -out syslog-test.crt -days 30 -subj "/CN=siem.kiste.org"
+  -keyout syslog-test.key -out syslog-test.crt -days 30 -subj "/CN=siem.example.com"
 
 # TLS-Listener auf 6514, zeigt eingehende Nachrichten
 openssl s_server -accept 6514 -cert syslog-test.crt -key syslog-test.key -quiet

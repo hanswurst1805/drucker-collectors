@@ -66,7 +66,7 @@ def load_config() -> dict:
 
     section = cfg["netasset"] if "netasset" in cfg else {}
     return {
-        "api_url": os.environ.get("NETASSET_URL", section.get("api_url", "https://ocs.kiste.org")),
+        "api_url": os.environ.get("NETASSET_URL", section.get("api_url", "https://netasset.example.com")),
         "api_key": os.environ.get("NETASSET_API_KEY", section.get("api_key", "")),
         "tags": os.environ.get("NETASSET_TAGS", section.get("tags", "")).split(","),
         "exposure_level": os.environ.get("NETASSET_EXPOSURE", section.get("exposure_level", "INTERN")),

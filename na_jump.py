@@ -58,7 +58,7 @@ def load_config() -> dict:
     jump = cfg["jump"] if "jump" in cfg else {}
     allow = [t.strip() for t in jump.get("allow_targets", "").split(",") if t.strip()]
     return {
-        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://ocs.kiste.org")).rstrip("/"),
+        "api_url": os.environ.get("NETASSET_URL", na.get("api_url", "https://netasset.example.com")).rstrip("/"),
         "api_key": os.environ.get("NETASSET_API_KEY", na.get("api_key", "")),
         "timeout": int(na.get("timeout", "30")),
         "ssh_options": jump.get("ssh_options", "").split() if jump.get("ssh_options") else [],
