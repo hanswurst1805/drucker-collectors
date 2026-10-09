@@ -402,21 +402,44 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict], list[dict]]:
     return ip_address, mac_address, open_ports, services
 
 
+def _container_ps_commands() -> list[list[str]]:
+    """ps-Aufrufe für alle erreichbaren Container-Engines.
+
+    Läuft der Collector als root, sieht `podman ps` nur root-eigene Container.
+    Rootless Podman führt pro Benutzer eine eigene Liste – deshalb zusätzlich
+    für jeden Benutzer mit aktiver Laufzeitumgebung (/run/user/<uid>, z. B.
+    per loginctl enable-linger) dessen Podman abfragen.
+    """
+    fmt = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"
+    cmds = [[engine, "ps", "--format", fmt]
+            for engine in ("docker", "podman") if shutil.which(engine)]
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and shutil.which("podman") \
+            and shutil.which("runuser"):
+        import pwd
+        run_user = Path("/run/user")
+        for d in sorted(run_user.iterdir()) if run_user.is_dir() else []:
+            if not d.name.isdigit() or d.name == "0":
+                continue
+            try:
+                user = pwd.getpwuid(int(d.name)).pw_name
+            except KeyError:
+                continue
+            cmds.append(["runuser", "-u", user, "--", "env", f"XDG_RUNTIME_DIR={d}",
+                         "podman", "ps", "--format", fmt])
+    return cmds
+
+
 def collect_containers() -> list[dict]:
     """
-    Host-Port → Container (Name/Image) via CLI – deckt Docker und Podman ab.
-    Liefert [] wenn keine Engine vorhanden/erreichbar (z.B. rootless ohne Rechte).
+    Host-Port → Container (Name/Image) via CLI – deckt Docker, Podman und
+    rootless Podman anderer Benutzer ab (siehe _container_ps_commands).
+    Liefert [] wenn keine Engine vorhanden/erreichbar.
     """
     import re
     results: list[dict] = []
-    for engine in ("docker", "podman"):
-        if not shutil.which(engine):
-            continue
+    for cmd in _container_ps_commands():
         try:
-            out = subprocess.check_output(
-                [engine, "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"],
-                stderr=subprocess.DEVNULL, timeout=8, text=True,
-            )
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=8, text=True)
         except Exception:
             continue
         for line in out.splitlines():
@@ -424,11 +447,12 @@ def collect_containers() -> list[dict]:
             if len(parts) < 4:
                 continue
             _id, name, image, ports = parts[0], parts[1], parts[2], parts[3]
+            # Pod-Infra-Container hält nur die Ports des Pods – kein echter Dienst
+            if name.endswith("-infra") and not image:
+                continue
             # z.B. "0.0.0.0:8080->80/tcp, 127.0.0.1:5432->5432/tcp"
             for m in re.finditer(r"(?::)?(\d+)->\d+/(?:tcp|udp)", ports):
                 results.append({"host_port": int(m.group(1)), "name": name, "image": image})
-        if results:
-            break  # eine Engine mit Treffern genügt
     return results
 
 
