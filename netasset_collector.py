@@ -435,11 +435,15 @@ def _container_ps_commands() -> list[tuple[str, list[str]]]:
             if not d.name.isdigit() or d.name == "0":
                 continue
             try:
-                user = pwd.getpwuid(int(d.name)).pw_name
+                pw = pwd.getpwuid(int(d.name))
             except KeyError:
                 continue
-            cmds.append(("podman", ["runuser", "-u", user, "--", "env",
-                                    f"XDG_RUNTIME_DIR={d}", "podman", "ps", "--format", "json"]))
+            # runuser -u behält root's HOME – rootless Podman scheitert dann an
+            # /root/.config (permission denied) und sieht keine Container.
+            cmds.append(("podman", ["runuser", "-u", pw.pw_name, "--", "env",
+                                    f"HOME={pw.pw_dir}", f"USER={pw.pw_name}",
+                                    f"LOGNAME={pw.pw_name}", f"XDG_RUNTIME_DIR={d}",
+                                    "podman", "ps", "--format", "json"]))
     return cmds
 
 
@@ -509,11 +513,19 @@ def collect_containers() -> list[dict]:
     results: list[dict] = []
     for engine, cmd in _container_ps_commands():
         try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=8, text=True)
-        except Exception:
+            # cwd=/: root's Arbeitsverzeichnis ist für den Ziel-User oft nicht lesbar
+            proc = subprocess.run(cmd, capture_output=True, timeout=8, text=True, cwd="/")
+        except Exception as e:
+            log.warning("Container-Abfrage fehlgeschlagen (%s): %s", " ".join(cmd), e)
             continue
-        parsed = _parse_podman_ps(out) if engine == "podman" else _parse_docker_ps(out)
+        if proc.returncode != 0:
+            log.warning("Container-Abfrage fehlgeschlagen (%s): %s", " ".join(cmd),
+                        (proc.stderr or "").strip()[:300])
+            continue
+        parsed = _parse_podman_ps(proc.stdout) if engine == "podman" \
+            else _parse_docker_ps(proc.stdout)
         results.extend(r for r in parsed if r["host_port"] > 0)
+    log.info("Container mit Host-Ports: %d", len(results))
     return results
 
 
