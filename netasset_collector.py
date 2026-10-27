@@ -402,19 +402,33 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict], list[dict]]:
     return ip_address, mac_address, open_ports, services
 
 
-def _container_ps_commands() -> list[list[str]]:
-    """ps-Aufrufe für alle erreichbaren Container-Engines.
+def _is_podman_shim(docker: str) -> bool:
+    """podman-docker installiert ein `docker`, das nur podman aufruft."""
+    try:
+        out = subprocess.check_output([docker, "--version"], stderr=subprocess.DEVNULL,
+                                      timeout=5, text=True)
+    except Exception:
+        return False
+    return "podman" in out.lower()
+
+
+def _container_ps_commands() -> list[tuple[str, list[str]]]:
+    """(engine, ps-Aufruf) für alle erreichbaren Container-Engines.
 
     Läuft der Collector als root, sieht `podman ps` nur root-eigene Container.
     Rootless Podman führt pro Benutzer eine eigene Liste – deshalb zusätzlich
     für jeden Benutzer mit aktiver Laufzeitumgebung (/run/user/<uid>, z. B.
     per loginctl enable-linger) dessen Podman abfragen.
     """
-    fmt = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"
-    cmds = [[engine, "ps", "--format", fmt]
-            for engine in ("docker", "podman") if shutil.which(engine)]
-    if hasattr(os, "geteuid") and os.geteuid() == 0 and shutil.which("podman") \
-            and shutil.which("runuser"):
+    cmds: list[tuple[str, list[str]]] = []
+    docker = shutil.which("docker")
+    if docker and not _is_podman_shim(docker):
+        cmds.append(("docker", [docker, "ps", "--format",
+                                "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"]))
+    if not shutil.which("podman"):
+        return cmds
+    cmds.append(("podman", ["podman", "ps", "--format", "json"]))
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and shutil.which("runuser"):
         import pwd
         run_user = Path("/run/user")
         for d in sorted(run_user.iterdir()) if run_user.is_dir() else []:
@@ -424,9 +438,66 @@ def _container_ps_commands() -> list[list[str]]:
                 user = pwd.getpwuid(int(d.name)).pw_name
             except KeyError:
                 continue
-            cmds.append(["runuser", "-u", user, "--", "env", f"XDG_RUNTIME_DIR={d}",
-                         "podman", "ps", "--format", fmt])
+            cmds.append(("podman", ["runuser", "-u", user, "--", "env",
+                                    f"XDG_RUNTIME_DIR={d}", "podman", "ps", "--format", "json"]))
     return cmds
+
+
+def _parse_docker_ps(out: str) -> list[dict]:
+    import re
+    results: list[dict] = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        _id, name, image, ports = parts[0], parts[1], parts[2], parts[3]
+        # z.B. "0.0.0.0:8080->80/tcp, 127.0.0.1:5432->5432/tcp"
+        for m in re.finditer(r"(?::)?(\d+)->\d+/(?:tcp|udp)", ports):
+            results.append({"host_port": int(m.group(1)), "name": name, "image": image})
+    return results
+
+
+def _parse_podman_ps(out: str) -> list[dict]:
+    """Podman-JSON → Host-Port-Zuordnung, pod-bewusst.
+
+    In einem Pod gehören die Portweiterleitungen dem Pod: `podman ps` zeigt
+    sie bei *jedem* Container (inkl. Infra). Zugeordnet wird deshalb der
+    Container, der den Ziel-Port exponiert (ExposedPorts aus dem Image); hat
+    der Pod nur einen echten Container, bekommt der ihn. Bleibt es mehrdeutig,
+    wird nicht geraten.
+    """
+    try:
+        containers = json.loads(out or "[]") or []
+    except ValueError:
+        return []
+    results: list[dict] = []
+    pods: dict[str, list[dict]] = {}
+    for c in containers:
+        if c.get("IsInfra"):
+            continue
+        if c.get("Pod"):
+            pods.setdefault(c["Pod"], []).append(c)
+            continue
+        for p in c.get("Ports") or []:
+            results.append(_podman_entry(c, p))
+    for members in pods.values():
+        mappings = {(p.get("host_port"), p.get("container_port"), p.get("protocol", "tcp")): p
+                    for c in members for p in c.get("Ports") or []}
+        for (_hp, cport, proto), p in mappings.items():
+            owners = [c for c in members
+                      if proto in ((c.get("ExposedPorts") or {}).get(str(cport)) or [])]
+            if not owners and len(members) == 1:
+                owners = members
+            if len(owners) == 1:
+                results.append(_podman_entry(owners[0], p))
+    return results
+
+
+def _podman_entry(c: dict, p: dict) -> dict:
+    names = c.get("Names") or []
+    return {"host_port": int(p.get("host_port") or 0),
+            "name": names[0] if names else (c.get("Id") or "")[:12],
+            "image": c.get("Image") or ""}
 
 
 def collect_containers() -> list[dict]:
@@ -435,24 +506,14 @@ def collect_containers() -> list[dict]:
     rootless Podman anderer Benutzer ab (siehe _container_ps_commands).
     Liefert [] wenn keine Engine vorhanden/erreichbar.
     """
-    import re
     results: list[dict] = []
-    for cmd in _container_ps_commands():
+    for engine, cmd in _container_ps_commands():
         try:
             out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=8, text=True)
         except Exception:
             continue
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) < 4:
-                continue
-            _id, name, image, ports = parts[0], parts[1], parts[2], parts[3]
-            # Pod-Infra-Container hält nur die Ports des Pods – kein echter Dienst
-            if name.endswith("-infra") and not image:
-                continue
-            # z.B. "0.0.0.0:8080->80/tcp, 127.0.0.1:5432->5432/tcp"
-            for m in re.finditer(r"(?::)?(\d+)->\d+/(?:tcp|udp)", ports):
-                results.append({"host_port": int(m.group(1)), "name": name, "image": image})
+        parsed = _parse_podman_ps(out) if engine == "podman" else _parse_docker_ps(out)
+        results.extend(r for r in parsed if r["host_port"] > 0)
     return results
 
 
