@@ -394,10 +394,20 @@ def collect_network(q) -> tuple[str | None, str | None, list[dict], list[dict]]:
 
     # Container hinter den Ports auflösen – Docker UND Podman (best effort)
     for c in collect_containers():
-        for s in services:
-            if s["port"] == c["host_port"]:
-                s["container_name"] = c["name"]
-                s["container_image"] = c["image"]
+        if c["host_port"]:
+            for s in services:
+                if s["port"] == c["host_port"]:
+                    s["container_name"] = c["name"]
+                    s["container_image"] = c["image"]
+        else:
+            # Nur im Container-/Pod-Netz erreichbar (z. B. DB hinter dem Proxy) –
+            # trotzdem als Dienst melden, damit der Container sichtbar ist.
+            services.append({
+                "port": c["port"], "proto": c["proto"],
+                "bind_address": f"container:{c['name']}", "bind_scope": "container",
+                "process_name": None, "process_path": None,
+                "container_name": c["name"], "container_image": c["image"],
+            })
 
     return ip_address, mac_address, open_ports, services
 
@@ -447,6 +457,13 @@ def _container_ps_commands() -> list[tuple[str, list[str]]]:
     return cmds
 
 
+def _entry(name: str, image: str, port, proto: str, host_port=None) -> dict:
+    """host_port gesetzt = am Host veröffentlicht; None = nur im Container-Netz."""
+    return {"name": name, "image": image or "", "port": int(port or 0),
+            "proto": (proto or "tcp").lower(),
+            "host_port": int(host_port) if host_port else None}
+
+
 def _parse_docker_ps(out: str) -> list[dict]:
     import re
     results: list[dict] = []
@@ -455,59 +472,78 @@ def _parse_docker_ps(out: str) -> list[dict]:
         if len(parts) < 4:
             continue
         _id, name, image, ports = parts[0], parts[1], parts[2], parts[3]
-        # z.B. "0.0.0.0:8080->80/tcp, 127.0.0.1:5432->5432/tcp"
-        for m in re.finditer(r"(?::)?(\d+)->\d+/(?:tcp|udp)", ports):
-            results.append({"host_port": int(m.group(1)), "name": name, "image": image})
+        # z.B. "0.0.0.0:8080->80/tcp, :::8080->80/tcp, 5432/tcp"
+        mapped, internal = set(), set()
+        for item in (x.strip() for x in ports.split(",")):
+            m = re.search(r"(\d+)->(\d+)/(tcp|udp)$", item)
+            if m:
+                mapped.add((int(m.group(1)), int(m.group(2)), m.group(3)))
+                continue
+            m = re.fullmatch(r"(\d+)/(tcp|udp)", item)
+            if m:
+                internal.add((int(m.group(1)), m.group(2)))
+        published = {(cp, pr) for _hp, cp, pr in mapped}
+        results += [_entry(name, image, cp, pr, hp) for hp, cp, pr in sorted(mapped)]
+        results += [_entry(name, image, cp, pr) for cp, pr in sorted(internal - published)]
     return results
 
 
+def _exposed(c: dict) -> set[tuple[int, str]]:
+    return {(int(port), proto) for port, protos in (c.get("ExposedPorts") or {}).items()
+            if str(port).isdigit() for proto in protos}
+
+
 def _parse_podman_ps(out: str) -> list[dict]:
-    """Podman-JSON → Host-Port-Zuordnung, pod-bewusst.
+    """Podman-JSON → Container-Ports, pod-bewusst.
 
     In einem Pod gehören die Portweiterleitungen dem Pod: `podman ps` zeigt
     sie bei *jedem* Container (inkl. Infra). Zugeordnet wird deshalb der
     Container, der den Ziel-Port exponiert (ExposedPorts aus dem Image); hat
     der Pod nur einen echten Container, bekommt der ihn. Bleibt es mehrdeutig,
-    wird nicht geraten.
+    wird nicht geraten. Exponierte Ports ohne Host-Weiterleitung kommen als
+    reine Container-Ports dazu (host_port=None).
     """
     try:
         containers = json.loads(out or "[]") or []
     except ValueError:
         return []
-    results: list[dict] = []
-    pods: dict[str, list[dict]] = {}
+    groups: dict[str, list[dict]] = {}
     for c in containers:
         if c.get("IsInfra"):
             continue
-        if c.get("Pod"):
-            pods.setdefault(c["Pod"], []).append(c)
-            continue
-        for p in c.get("Ports") or []:
-            results.append(_podman_entry(c, p))
-    for members in pods.values():
-        mappings = {(p.get("host_port"), p.get("container_port"), p.get("protocol", "tcp")): p
+        # Container ohne Pod = eigene Gruppe
+        groups.setdefault(c.get("Pod") or f"solo:{c.get('Id')}", []).append(c)
+
+    results: list[dict] = []
+    for members in groups.values():
+        mappings = {(p.get("host_port"), p.get("container_port"),
+                     (p.get("protocol") or "tcp").lower())
                     for c in members for p in c.get("Ports") or []}
-        for (_hp, cport, proto), p in mappings.items():
-            owners = [c for c in members
-                      if proto in ((c.get("ExposedPorts") or {}).get(str(cport)) or [])]
+        published: dict[int, set] = {}
+        for hp, cport, proto in sorted(mappings, key=str):
+            owners = [c for c in members if (int(cport or 0), proto) in _exposed(c)]
             if not owners and len(members) == 1:
                 owners = members
             if len(owners) == 1:
-                results.append(_podman_entry(owners[0], p))
+                o = owners[0]
+                results.append(_entry(_cname(o), o.get("Image"), cport, proto, hp))
+                published.setdefault(id(o), set()).add((int(cport or 0), proto))
+        for c in members:
+            for cport, proto in sorted(_exposed(c) - published.get(id(c), set())):
+                results.append(_entry(_cname(c), c.get("Image"), cport, proto))
     return results
 
 
-def _podman_entry(c: dict, p: dict) -> dict:
+def _cname(c: dict) -> str:
     names = c.get("Names") or []
-    return {"host_port": int(p.get("host_port") or 0),
-            "name": names[0] if names else (c.get("Id") or "")[:12],
-            "image": c.get("Image") or ""}
+    return names[0] if names else (c.get("Id") or "")[:12]
 
 
 def collect_containers() -> list[dict]:
     """
-    Host-Port → Container (Name/Image) via CLI – deckt Docker, Podman und
-    rootless Podman anderer Benutzer ab (siehe _container_ps_commands).
+    Container-Ports (am Host veröffentlicht oder nur im Container-Netz) via CLI –
+    deckt Docker, Podman und rootless Podman anderer Benutzer ab
+    (siehe _container_ps_commands).
     Liefert [] wenn keine Engine vorhanden/erreichbar.
     """
     results: list[dict] = []
@@ -524,8 +560,10 @@ def collect_containers() -> list[dict]:
             continue
         parsed = _parse_podman_ps(proc.stdout) if engine == "podman" \
             else _parse_docker_ps(proc.stdout)
-        results.extend(r for r in parsed if r["host_port"] > 0)
-    log.info("Container mit Host-Ports: %d", len(results))
+        results.extend(r for r in parsed if r["port"] > 0)
+    log.info("Container: %d (%d Ports, davon %d am Host veröffentlicht)",
+             len({r["name"] for r in results}), len(results),
+             sum(1 for r in results if r["host_port"]))
     return results
 
 
