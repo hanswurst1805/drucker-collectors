@@ -27,7 +27,7 @@ import logging
 import sys
 from pathlib import Path
 
-from netasset_collector import load_config, log, push_asset, push_sbom
+from netasset_collector import load_config, log, push_asset, push_container_images, push_sbom
 from spool_collector import SPOOL_FORMAT
 
 
@@ -40,6 +40,8 @@ def import_file(config: dict, path: Path, no_sbom: bool) -> None:
         raise RuntimeError("API hat keine asset_id zurückgegeben")
     if not no_sbom:
         push_sbom(config, asset_id, bundle.get("sbom") or [])
+    if "container_images" in bundle:
+        push_container_images(config, asset_id, bundle["container_images"])
 
 
 def main():

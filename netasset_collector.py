@@ -33,6 +33,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Optional: fehlt die Datei (z. B. Einzeldatei-Installation), läuft alles andere normal
+try:
+    import container_sbom
+except ImportError:
+    container_sbom = None
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -799,6 +805,14 @@ def push_sbom(config: dict, asset_id: str, packages: list[dict]) -> None:
     log.info("SBOM: %d Pakete hochgeladen", len(packages))
 
 
+def push_container_images(config: dict, asset_id: str, images: list[dict]) -> None:
+    """Meldet die laufenden Container-Images samt Paketlisten neu gescannter Images."""
+    url = config["api_url"].rstrip("/") + f"/api/v1/container-images/assets/{asset_id}"
+    api_request(url, config["api_key"], {"images": images}, max(config["timeout"], 120))
+    log.info("Container-Images: %d gemeldet, %d mit neuer Paketliste",
+             len(images), sum(1 for i in images if "packages" in i))
+
+
 # ---------------------------------------------------------------------------
 # Hauptfunktion
 # ---------------------------------------------------------------------------
@@ -942,6 +956,16 @@ def main():
     if asset_id and not args.no_sbom:
         log.info("Lade SBOM hoch (%d Pakete)...", len(packages))
         push_sbom(config, asset_id, packages)
+
+    if asset_id and container_sbom and not args.no_sbom:
+        # Ein Fehler hier darf die Host-Daten nicht gefährden – die sind schon gemeldet
+        try:
+            images = container_sbom.collect()
+            if images is not None:
+                push_container_images(config, asset_id, images)
+                container_sbom.remember(images)
+        except Exception as e:
+            log.warning("Container-SBOM fehlgeschlagen: %s", e)
 
     log.info("Fertig.")
 

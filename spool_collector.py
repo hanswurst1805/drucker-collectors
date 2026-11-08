@@ -36,7 +36,7 @@ import re
 import sys
 from pathlib import Path
 
-from netasset_collector import CONF_PATHS, collect, load_config, log, require_osquery
+from netasset_collector import CONF_PATHS, collect, container_sbom, load_config, log, require_osquery
 
 SPOOL_FORMAT = "drucker-spool/1"
 
@@ -115,6 +115,16 @@ def main():
         "sbom": packages,
     }
 
+    # Fehlt der Schlüssel, bleiben die Images auf dem Server unverändert
+    images = None
+    if container_sbom:
+        try:
+            images = container_sbom.collect()
+        except Exception as e:
+            log.warning("Container-SBOM fehlgeschlagen: %s", e)
+    if images is not None:
+        bundle["container_images"] = images
+
     if args.stdout:
         print(json.dumps(bundle, indent=2, ensure_ascii=False))
         return
@@ -122,6 +132,8 @@ def main():
     gid = prepare_dir(spool["dir"], spool["group"])
     path = write_bundle(spool["dir"], bundle, gid)
     log.info("Abgelegt: %s (%d Pakete)", path, len(packages))
+    if images is not None:
+        container_sbom.remember(images)
     prune(spool["dir"], spool["keep"])
 
 
