@@ -119,7 +119,8 @@ def _scan(syft: str, ctx: dict, image_id: str) -> dict | None:
         except (subprocess.SubprocessError, OSError) as e:
             log.warning("Syft %s: %s", image_id[:12], e)
             return None
-    elif ctx["user"]:
+    elif ctx["user"] or (hasattr(os, "geteuid") and os.geteuid() != 0):
+        # Rootless: image mount geht nur im User-Namespace
         out = _run(_argv(ctx, ["unshare", "sh", "-c", _MOUNT_SCAN, "_", image_id, syft]), SCAN_TIMEOUT)
     else:
         out = _run(["sh", "-c", _MOUNT_SCAN, "_", image_id, syft], SCAN_TIMEOUT)
